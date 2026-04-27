@@ -752,6 +752,8 @@ export const TetrisBattle = (props: {
   const board = createMemo(() => displayBoard(state()))
   const incomingBars = createMemo(() => Array.from({ length: 12 }, (_, i) => i < Math.min(12, state().stats.incoming)))
   const boardBorderColor = createMemo(() => state().won ? theme().success : state().gameOver ? theme().error : theme().borderSubtle)
+  const opponentBorderColor = createMemo(() => state().won ? theme().error : state().gameOver ? theme().success : theme().borderSubtle)
+  const boardTitle = createMemo(() => state().won ? " YOU WIN " : state().gameOver ? " GAME OVER " : "")
   const convexUrl = createMemo(() => asString(props.api.kv.get(props.convexUrlKey, props.defaultConvexUrl), props.defaultConvexUrl))
   const me = createMemo(() => room()?.players.find((p) => p.playerId === playerId))
   const opponent = createMemo(() => room()?.players.find((p) => p.playerId !== playerId && p.status !== "left"))
@@ -963,10 +965,13 @@ export const TetrisBattle = (props: {
       if (countdownStartTimer) clearTimeout(countdownStartTimer)
       countdownStartTimer = setTimeout(requestStartMatch, delay + 120)
     }
+    const localMe = me()
+    if (localMe && localMe.ready !== untrack(ready)) setReadyLocal(localMe.ready)
     if (snapshot?.room.status === "active" && !started()) {
       setStarted(true)
       setPaused(false)
       lastPublishedSnapshot = ""
+      consumedAttackIds.clear()
       const high = untrack(() => state().highScore)
       const best = untrack(() => state().bestAttack)
       setState(createInitialState(high, best, `${snapshot.room.seed}:${playerId}`))
@@ -1058,7 +1063,7 @@ export const TetrisBattle = (props: {
     const code = roomCode()
     if (cx && code) {
       setStarted(false)
-      setReadyLocal(false)
+      consumedAttackIds.clear()
       void runMutation(() => cx.mutation(refs.rematch, { code, seed: createId(), playerId }))
     }
   }
@@ -1333,16 +1338,19 @@ export const TetrisBattle = (props: {
       </Show>
 
       <Show when={!isLobby()}>
-      <box flexDirection="row" gap={2}>
+      <box flexDirection="column">
+      <box flexDirection="row" gap={2} alignItems="flex-start">
         <box
           flexDirection="column"
           backgroundColor={theme().background}
           paddingTop={1}
           paddingBottom={1}
-          paddingLeft={1}
-          paddingRight={1}
+          paddingLeft={2}
+          paddingRight={2}
           border
           borderColor={boardBorderColor()}
+          title={boardTitle()}
+          titleAlignment="center"
         >
           <For each={board()}>
             {(row) => (
@@ -1374,15 +1382,15 @@ export const TetrisBattle = (props: {
         <box
           flexDirection="column"
           backgroundColor={theme().background}
-          paddingTop={1}
+          paddingTop={0}
           paddingBottom={1}
-          paddingLeft={1}
-          paddingRight={1}
+          paddingLeft={2}
+          paddingRight={2}
           border
-          borderColor={theme().borderSubtle}
+          borderColor={opponentBorderColor()}
         >
           <text fg={theme().accent}>
-            <b>RIVAL</b>
+            <b>OPPONENT            </b>
           </text>
           <For each={state().opponentBoard}>
             {(row) => (
@@ -1404,10 +1412,7 @@ export const TetrisBattle = (props: {
           border
           borderColor={theme().borderSubtle}
         >
-          <text fg={theme().accent}>
-            <b>BATTLE</b>
-          </text>
-          <Stat label="SENT" value={state().stats.sent} color={theme().success} />
+          <Stat label="LINES SENT" value={state().stats.sent} color={theme().success} />
           <Stat label="INCOMING" value={state().stats.incoming} color={theme().error} />
           <Stat label="COMBO" value={state().stats.combo} color={theme().accent} />
           <Stat label="OPP LINES" value={opponent()?.lines ?? 0} color={theme().warning} />
@@ -1436,7 +1441,7 @@ export const TetrisBattle = (props: {
         flexDirection="row"
         gap={1}
         backgroundColor={theme().backgroundElement}
-        paddingLeft={2}
+        paddingLeft={4}
         paddingRight={2}
       >
         <Show
@@ -1496,6 +1501,7 @@ export const TetrisBattle = (props: {
           </text>
           <text fg={theme().text}>to quit</text>
         </Show>
+      </box>
       </box>
       </Show>
     </box>
