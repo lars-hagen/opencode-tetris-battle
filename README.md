@@ -39,8 +39,6 @@ Lobby:
 - `Enter` joins the typed room code.
 - `M` starts matchmaking.
 - `R` toggles ready.
-- `H` toggles the display handle.
-- `U` configures the Convex URL.
 - `Q` quits.
 
 Game:
@@ -57,8 +55,6 @@ Game:
 ## Hosted backend
 
 The plugin works out of the box with the public hosted Tetris Battle backend.
-
-You can override the backend with `/tetris-battle-url` if you have a compatible Convex deployment.
 
 ## Development
 

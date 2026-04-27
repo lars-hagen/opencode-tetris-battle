@@ -8,13 +8,12 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount, 
 
 const highScoreKey = "opencode.tetris-battle.highscore"
 const bestAttackKey = "opencode.tetris-battle.best-attack"
-const playerHandleKey = "opencode.tetris-battle.handle"
 const boardWidth = 10
 const boardHeight = 20
 const tickMs = 500
 const lineScores = [0, 100, 300, 500, 800] as const
 
-type RoomStatus = "waiting" | "active" | "done"
+type RoomStatus = "waiting" | "countdown" | "active" | "done"
 type PlayerStatus = "lobby" | "playing" | "ko" | "left"
 
 type RemoteRoom = {
@@ -29,7 +28,6 @@ type RemoteRoom = {
 
 type RemotePlayer = {
   playerId: string
-  handle: string
   side: "host" | "guest"
   ready: boolean
   status: PlayerStatus
@@ -59,10 +57,11 @@ type RoomSnapshot = {
 
 const refs = {
   getRoom: makeFunctionReference<"query", { code: string; playerId: string }, RoomSnapshot | null>("tetris:getRoom"),
-  createRoom: makeFunctionReference<"mutation", { code: string; seed: string; playerId: string; handle: string }, { code: string }>("tetris:createRoom"),
-  joinRoom: makeFunctionReference<"mutation", { code: string; playerId: string; handle: string }, { code: string }>("tetris:joinRoom"),
-  quickJoin: makeFunctionReference<"mutation", { code: string; seed: string; playerId: string; handle: string }, { code: string }>("tetris:quickJoin"),
+  createRoom: makeFunctionReference<"mutation", { code: string; seed: string; playerId: string }, { code: string }>("tetris:createRoom"),
+  joinRoom: makeFunctionReference<"mutation", { code: string; playerId: string }, { code: string }>("tetris:joinRoom"),
+  quickJoin: makeFunctionReference<"mutation", { code: string; seed: string; playerId: string }, { code: string }>("tetris:quickJoin"),
   setReady: makeFunctionReference<"mutation", { code: string; playerId: string; ready: boolean }, null>("tetris:setReady"),
+  startMatch: makeFunctionReference<"mutation", { code: string }, null>("tetris:startMatch"),
   rematch: makeFunctionReference<"mutation", { code: string; seed: string; playerId: string }, null>("tetris:rematch"),
   heartbeat: makeFunctionReference<"mutation", { code: string; playerId: string }, null>("tetris:heartbeat"),
   submitBoard: makeFunctionReference<"mutation", { code: string; playerId: string; board: string; score: number; lines: number; level: number; sent: number; received: number; incoming: number; gameOver: boolean }, null>("tetris:submitBoard"),
@@ -629,6 +628,13 @@ const asSavedNumber = (value: unknown): number => {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
 }
 
+const countdownText = (startedAt: number | undefined, now: number): string => {
+  if (!startedAt) return "3"
+  const remaining = startedAt - now
+  if (remaining <= 0) return "GO"
+  return String(Math.max(1, Math.ceil(remaining / 1000)))
+}
+
 const cellGlyph = (cell: DisplayCell): string => {
   if (cell === null) return "·"
   if (cell === "ghost") return "░"
@@ -709,11 +715,9 @@ export const TetrisBattle = (props: {
   api: TuiPluginApi
   convexUrlKey: string
   defaultConvexUrl: string
-  onConfigureUrl: () => void
   onClose: () => void
 }) => {
   const playerId = getPlayerId()
-  const [handle, setHandle] = createSignal(asString(props.api.kv.get(playerHandleKey, ""), "player"))
   const [roomCode, setRoomCode] = createSignal("")
   const [client, setClient] = createSignal<ConvexClient | null>(null)
   const [room, setRoom] = createSignal<RoomSnapshot | null>(null)
@@ -723,6 +727,7 @@ export const TetrisBattle = (props: {
   const [ready, setReadyLocal] = createSignal(false)
   const [started, setStarted] = createSignal(false)
   const [editingRoomCode, setEditingRoomCode] = createSignal(false)
+  const [now, setNow] = createSignal(Date.now())
   const [state, setState] = createSignal(
     createInitialState(
       asSavedNumber(props.api.kv.get(highScoreKey, 0)),
@@ -731,22 +736,28 @@ export const TetrisBattle = (props: {
   )
   const [paused, setPaused] = createSignal(false)
   let timer: ReturnType<typeof setTimeout> | undefined
+  let countdownStartTimer: ReturnType<typeof setTimeout> | undefined
   let publishTimer: ReturnType<typeof setInterval> | undefined
+  let clockTimer: ReturnType<typeof setInterval> | undefined
   let unsubscribeRoom: (() => void) | undefined
   let unsubscribeConn: (() => void) | undefined
   let currentUrl = ""
   let lastPublishedSnapshot = ""
   let publishInFlight = false
+  let startMatchInFlight = false
+  let lastStartMatchAttempt = 0
   const consumedAttackIds = new Set<string>()
 
   const theme = createMemo(() => props.api.theme.current)
   const board = createMemo(() => displayBoard(state()))
   const incomingBars = createMemo(() => Array.from({ length: 12 }, (_, i) => i < Math.min(12, state().stats.incoming)))
+  const boardBorderColor = createMemo(() => state().won ? theme().success : state().gameOver ? theme().error : theme().borderSubtle)
   const convexUrl = createMemo(() => asString(props.api.kv.get(props.convexUrlKey, props.defaultConvexUrl), props.defaultConvexUrl))
   const me = createMemo(() => room()?.players.find((p) => p.playerId === playerId))
   const opponent = createMemo(() => room()?.players.find((p) => p.playerId !== playerId && p.status !== "left"))
   const roomStatus = createMemo(() => room()?.room.status ?? "waiting")
-  const isLobby = createMemo(() => !roomCode() || roomStatus() === "waiting" || !started())
+  const countdown = createMemo(() => roomStatus() === "countdown" ? countdownText(room()?.room.startedAt, now()) : "")
+  const isLobby = createMemo(() => !roomCode() || roomStatus() === "waiting" || roomStatus() === "countdown" || !started())
   const winner = createMemo(() => room()?.room.winnerPlayerId)
 
   let lastPersistedHighScore = asSavedNumber(props.api.kv.get(highScoreKey, 0))
@@ -763,6 +774,21 @@ export const TetrisBattle = (props: {
     } finally {
       setBusy(false)
     }
+  }
+
+  const requestStartMatch = () => {
+    const cx = client()
+    const snapshot = room()
+    if (!cx || snapshot?.room.status !== "countdown") return
+    const nowMs = Date.now()
+    if (startMatchInFlight || nowMs - lastStartMatchAttempt < 500) return
+    startMatchInFlight = true
+    lastStartMatchAttempt = nowMs
+    cx.mutation(refs.startMatch, { code: snapshot.room.code })
+      .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+      .finally(() => {
+        startMatchInFlight = false
+      })
   }
 
   const subscribeRoom = (code: string) => {
@@ -802,7 +828,7 @@ export const TetrisBattle = (props: {
     const code = untrack(roomCode)
     if (code) {
       subscribeRoom(code)
-      void next.mutation(refs.joinRoom, { code, playerId, handle: untrack(handle) }).catch(() => {})
+      void next.mutation(refs.joinRoom, { code, playerId }).catch(() => {})
     }
   })
 
@@ -816,13 +842,12 @@ export const TetrisBattle = (props: {
   const createRoom = async () => {
     const cx = client()
     if (!cx) {
-      props.onConfigureUrl()
+      setError("Convex backend is not configured")
       return
     }
-    props.api.kv.set(playerHandleKey, handle())
     const code = createRoomCode()
     const result = await runMutation(() =>
-      cx.mutation(refs.createRoom, { code, seed: createId(), playerId, handle: handle() }),
+      cx.mutation(refs.createRoom, { code, seed: createId(), playerId }),
     )
     if (result?.code) setRoomAndSubscribe(result.code)
     setReadyLocal(false)
@@ -832,7 +857,7 @@ export const TetrisBattle = (props: {
   const joinRoom = async () => {
     const cx = client()
     if (!cx) {
-      props.onConfigureUrl()
+      setError("Convex backend is not configured")
       return
     }
     const code = normalizeRoomCode(roomCode())
@@ -840,8 +865,7 @@ export const TetrisBattle = (props: {
       setError("Press J, type the room code, then press Enter")
       return
     }
-    props.api.kv.set(playerHandleKey, handle())
-    const result = await runMutation(() => cx.mutation(refs.joinRoom, { code, playerId, handle: handle() }))
+    const result = await runMutation(() => cx.mutation(refs.joinRoom, { code, playerId }))
     if (result?.code) setRoomAndSubscribe(result.code)
     setReadyLocal(false)
     setStarted(false)
@@ -855,12 +879,11 @@ export const TetrisBattle = (props: {
   const quickJoin = async () => {
     const cx = client()
     if (!cx) {
-      props.onConfigureUrl()
+      setError("Convex backend is not configured")
       return
     }
-    props.api.kv.set(playerHandleKey, handle())
     const result = await runMutation(() =>
-      cx.mutation(refs.quickJoin, { code: createRoomCode(), seed: createId(), playerId, handle: handle() }),
+      cx.mutation(refs.quickJoin, { code: createRoomCode(), seed: createId(), playerId }),
     )
     if (result?.code) setRoomAndSubscribe(result.code)
     setReadyLocal(false)
@@ -935,6 +958,11 @@ export const TetrisBattle = (props: {
     if (remoteOpponent) {
       setState((current) => ({ ...current, opponentBoard: decodeBoard(remoteOpponent.board) }))
     }
+    if (snapshot?.room.status === "countdown") {
+      const delay = Math.max(0, (snapshot.room.startedAt ?? 0) - Date.now())
+      if (countdownStartTimer) clearTimeout(countdownStartTimer)
+      countdownStartTimer = setTimeout(requestStartMatch, delay + 120)
+    }
     if (snapshot?.room.status === "active" && !started()) {
       setStarted(true)
       setPaused(false)
@@ -944,7 +972,7 @@ export const TetrisBattle = (props: {
       setState(createInitialState(high, best, `${snapshot.room.seed}:${playerId}`))
       schedule()
     }
-    if (snapshot?.room.status === "waiting" && started()) setStarted(false)
+    if ((snapshot?.room.status === "waiting" || snapshot?.room.status === "countdown") && started()) setStarted(false)
     if (snapshot?.room.status === "done") {
       clearTimer()
       setState((current) => ({
@@ -994,9 +1022,17 @@ export const TetrisBattle = (props: {
     timer = undefined
   }
 
+  const clearCountdownStartTimer = () => {
+    if (!countdownStartTimer) return
+    clearTimeout(countdownStartTimer)
+    countdownStartTimer = undefined
+  }
+
   const clearNetworkTimers = () => {
     if (publishTimer) clearInterval(publishTimer)
+    if (clockTimer) clearInterval(clockTimer)
     publishTimer = undefined
+    clockTimer = undefined
   }
 
   const step = (soft = false) => {
@@ -1031,6 +1067,10 @@ export const TetrisBattle = (props: {
     const code = roomCode()
     if (code) subscribeRoom(code)
     publishTimer = setInterval(() => void publishBoard(), 250)
+    clockTimer = setInterval(() => {
+      setNow(Date.now())
+      if (roomStatus() === "countdown" && countdown() === "GO") requestStartMatch()
+    }, 100)
   })
   onCleanup(() => {
     persist(state())
@@ -1038,6 +1078,7 @@ export const TetrisBattle = (props: {
     const cx = client()
     if (cx && code) void cx.mutation(refs.leaveRoom, { code, playerId }).catch(() => {})
     clearTimer()
+    clearCountdownStartTimer()
     clearNetworkTimers()
     unsubscribeRoom?.()
     unsubscribeConn?.()
@@ -1093,12 +1134,6 @@ export const TetrisBattle = (props: {
       return
     }
 
-    if (isKey(evt, "u", "U")) {
-      prevent(evt)
-      props.onConfigureUrl()
-      return
-    }
-
     if (isLobby()) {
       prevent(evt)
       if (isKey(evt, "m", "M")) {
@@ -1115,10 +1150,6 @@ export const TetrisBattle = (props: {
       }
       if (isEnterKey(evt)) {
         void joinRoom()
-        return
-      }
-      if (isKey(evt, "h", "H")) {
-        setHandle((value) => (value === "player" ? "agent" : "player"))
         return
       }
       if (isKey(evt, "r", "R")) {
@@ -1257,17 +1288,27 @@ export const TetrisBattle = (props: {
           <text fg={theme().accent}>
             <b>MULTIPLAYER LOBBY</b>
           </text>
-          <text fg={theme().text}>Handle: {handle()} · Player: {playerId.slice(0, 8)}</text>
+          <text fg={theme().text}>Player: {playerId.slice(0, 8)}</text>
           <text fg={editingRoomCode() ? theme().warning : theme().text}>
             Room code: {roomCode() || (editingRoomCode() ? "typing..." : "press J to type, N create, M match")}
           </text>
           <Show when={editingRoomCode()}>
             <text fg={theme().warning}>Typing room code. Enter joins, Esc cancels, Backspace edits.</text>
           </Show>
-          <text fg={theme().textMuted}>N create private room · J type room code · Enter join typed code · M matchmaking · R ready · U Convex URL · Q quit</text>
-          <text fg={theme().textMuted}>Each OpenCode window gets its own player id. H only toggles the handle label.</text>
+          <Show when={roomStatus() === "countdown"}>
+            <box flexDirection="row" gap={1} marginTop={1} marginBottom={1}>
+              <text fg={theme().warning}>
+                <b>MATCH STARTING IN</b>
+              </text>
+              <text fg={theme().success}>
+                <b>{countdown()}</b>
+              </text>
+            </box>
+          </Show>
+          <text fg={theme().textMuted}>N create private room · J type room code · Enter join typed code · M matchmaking · R ready · Q quit</text>
+          <text fg={theme().textMuted}>Each OpenCode window gets its own player id.</text>
           <Show when={!convexUrl()}>
-            <text fg={theme().error}>Convex URL missing. Press U and paste your deployment URL.</text>
+            <text fg={theme().error}>Convex backend URL missing.</text>
           </Show>
           <Show when={busy()}>
             <text fg={theme().warning}>Working...</text>
@@ -1281,11 +1322,11 @@ export const TetrisBattle = (props: {
               <For each={room()?.players ?? []}>
                 {(player) => (
                   <text fg={player.ready ? theme().success : theme().textMuted}>
-                    {player.side} · {player.handle} · {player.ready ? "ready" : "not ready"} · {player.status}
+                    {player.side} · {player.playerId.slice(0, 8)} · {player.ready ? "ready" : "not ready"} · {player.status}
                   </text>
                 )}
               </For>
-              <text fg={theme().textMuted}>Game starts automatically when two players are ready.</text>
+              <text fg={theme().textMuted}>Countdown starts automatically when two players are ready.</text>
             </box>
           </Show>
         </box>
@@ -1301,7 +1342,7 @@ export const TetrisBattle = (props: {
           paddingLeft={1}
           paddingRight={1}
           border
-          borderColor={theme().borderSubtle}
+          borderColor={boardBorderColor()}
         >
           <For each={board()}>
             {(row) => (
@@ -1386,7 +1427,6 @@ export const TetrisBattle = (props: {
             <Key label="C" desc="hold" />
             <Key label="P" desc="pause" />
             <Key label="Q" desc="quit" />
-            <Key label="U" desc="convex url" />
           </box>
         </box>
       </box>
@@ -1409,7 +1449,7 @@ export const TetrisBattle = (props: {
                   when={paused()}
                   fallback={
                     <text fg={theme().textMuted}>
-                      clear lines to cancel garbage or send attacks to {opponent()?.handle ?? "opponent"}
+                      clear lines to cancel garbage or send attacks to opponent
                     </text>
                   }
                 >
@@ -1428,7 +1468,7 @@ export const TetrisBattle = (props: {
                 <b>GAME OVER</b>
               </text>
               <text fg={theme().text}>
-                Sent {state().stats.sent} · Score {state().score} · Winner {winner() === playerId ? "you" : opponent()?.handle ?? "opponent"} · Press
+                Sent {state().stats.sent} · Score {state().score} · Winner {winner() === playerId ? "you" : "opponent"} · Press
               </text>
               <text fg={theme().accent}>
                 <b>R</b>
