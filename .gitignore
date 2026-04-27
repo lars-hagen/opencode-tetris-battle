@@ -1,0 +1,9 @@
+node_modules/
+*.log
+*.pid
+
+.env.local
+.convex/
+
+# Backend source is deployed privately and is not published with the client plugin.
+convex/
