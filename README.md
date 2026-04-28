@@ -50,6 +50,7 @@ Game:
 - `Space` hard drops.
 - `C` holds.
 - `P` pauses.
+- `L` returns to the lobby.
 - `Q` quits.
 
 ## Hosted backend
