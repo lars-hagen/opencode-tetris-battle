@@ -11,10 +11,13 @@ const bestAttackKey = "opencode.tetris-battle.best-attack"
 const boardWidth = 10
 const boardHeight = 20
 const tickMs = 500
+const heartbeatMs = 2_000
+const opponentStaleMs = 8_000
 const lineScores = [0, 100, 300, 500, 800] as const
 
 type RoomStatus = "waiting" | "countdown" | "active" | "done"
 type PlayerStatus = "lobby" | "playing" | "ko" | "left"
+type ConfirmAction = "quit" | "lobby"
 
 type RemoteRoom = {
   code: string
@@ -635,6 +638,11 @@ const countdownText = (startedAt: number | undefined, now: number): string => {
   return String(Math.max(1, Math.ceil(remaining / 1000)))
 }
 
+const formatLatency = (value: number | null): string => {
+  if (value === null) return "..."
+  return `${Math.max(0, Math.round(value))}ms`
+}
+
 const cellGlyph = (cell: DisplayCell): string => {
   if (cell === null) return "·"
   if (cell === "ghost") return "░"
@@ -727,7 +735,10 @@ export const TetrisBattle = (props: {
   const [ready, setReadyLocal] = createSignal(false)
   const [started, setStarted] = createSignal(false)
   const [editingRoomCode, setEditingRoomCode] = createSignal(false)
+  const [confirmAction, setConfirmAction] = createSignal<ConfirmAction | null>(null)
   const [now, setNow] = createSignal(Date.now())
+  const [publishLatencyMs, setPublishLatencyMs] = createSignal<number | null>(null)
+  const [opponentBoardSeenAt, setOpponentBoardSeenAt] = createSignal<number | null>(null)
   const [state, setState] = createSignal(
     createInitialState(
       asSavedNumber(props.api.kv.get(highScoreKey, 0)),
@@ -738,6 +749,7 @@ export const TetrisBattle = (props: {
   let timer: ReturnType<typeof setTimeout> | undefined
   let countdownStartTimer: ReturnType<typeof setTimeout> | undefined
   let publishTimer: ReturnType<typeof setInterval> | undefined
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined
   let clockTimer: ReturnType<typeof setInterval> | undefined
   let unsubscribeRoom: (() => void) | undefined
   let unsubscribeConn: (() => void) | undefined
@@ -746,6 +758,7 @@ export const TetrisBattle = (props: {
   let publishInFlight = false
   let startMatchInFlight = false
   let lastStartMatchAttempt = 0
+  let lastOpponentBoard = ""
   const consumedAttackIds = new Set<string>()
 
   const theme = createMemo(() => props.api.theme.current)
@@ -754,6 +767,7 @@ export const TetrisBattle = (props: {
   const boardBorderColor = createMemo(() => state().won ? theme().success : state().gameOver ? theme().error : theme().borderSubtle)
   const opponentBorderColor = createMemo(() => state().won ? theme().error : state().gameOver ? theme().success : theme().borderSubtle)
   const boardTitle = createMemo(() => state().won ? " YOU WIN " : state().gameOver ? " GAME OVER " : "")
+  const opponentTitle = createMemo(() => state().won ? " GAME OVER " : "")
   const convexUrl = createMemo(() => asString(props.api.kv.get(props.convexUrlKey, props.defaultConvexUrl), props.defaultConvexUrl))
   const me = createMemo(() => room()?.players.find((p) => p.playerId === playerId))
   const opponent = createMemo(() => room()?.players.find((p) => p.playerId !== playerId && p.status !== "left"))
@@ -761,6 +775,26 @@ export const TetrisBattle = (props: {
   const countdown = createMemo(() => roomStatus() === "countdown" ? countdownText(room()?.room.startedAt, now()) : "")
   const isLobby = createMemo(() => !roomCode() || roomStatus() === "waiting" || roomStatus() === "countdown" || !started())
   const winner = createMemo(() => room()?.room.winnerPlayerId)
+  const opponentBoardAgeMs = createMemo(() => {
+    const seenAt = opponentBoardSeenAt()
+    if (seenAt === null) return null
+    return now() - seenAt
+  })
+  const opponentLastSeenAgeMs = createMemo(() => {
+    const lastSeen = opponent()?.lastSeen
+    if (lastSeen === undefined) return null
+    return now() - lastSeen
+  })
+  const opponentDisconnected = createMemo(() => {
+    const age = opponentLastSeenAgeMs()
+    return age !== null && age > opponentStaleMs
+  })
+  const confirmMessage = createMemo(() => {
+    const action = confirmAction()
+    if (action === "quit") return "Press Q again to quit, Esc to cancel"
+    if (action === "lobby") return "Press L again to leave for lobby, Esc to cancel"
+    return ""
+  })
 
   let lastPersistedHighScore = asSavedNumber(props.api.kv.get(highScoreKey, 0))
   let lastPersistedBestAttack = asSavedNumber(props.api.kv.get(bestAttackKey, 0))
@@ -892,6 +926,13 @@ export const TetrisBattle = (props: {
     setStarted(false)
   }
 
+  const sendHeartbeat = () => {
+    const cx = client()
+    const code = roomCode()
+    if (!cx || !code) return
+    void cx.mutation(refs.heartbeat, { code, playerId }).catch(() => {})
+  }
+
   const toggleReady = async () => {
     const cx = client()
     const code = roomCode()
@@ -918,6 +959,7 @@ export const TetrisBattle = (props: {
     ].join("|")
     if (publishInFlight || snapshotKey === lastPublishedSnapshot) return
     publishInFlight = true
+    const publishStartedAt = Date.now()
     await cx.mutation(refs.submitBoard, {
       code,
       playerId,
@@ -931,6 +973,7 @@ export const TetrisBattle = (props: {
       gameOver: next.gameOver,
     })
       .then(() => {
+        setPublishLatencyMs(Date.now() - publishStartedAt)
         lastPublishedSnapshot = snapshotKey
       })
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
@@ -958,6 +1001,10 @@ export const TetrisBattle = (props: {
     const snapshot = room()
     const remoteOpponent = opponent()
     if (remoteOpponent) {
+      if (remoteOpponent.board !== lastOpponentBoard) {
+        lastOpponentBoard = remoteOpponent.board
+        setOpponentBoardSeenAt(Date.now())
+      }
       setState((current) => ({ ...current, opponentBoard: decodeBoard(remoteOpponent.board) }))
     }
     if (snapshot?.room.status === "countdown") {
@@ -971,6 +1018,8 @@ export const TetrisBattle = (props: {
       setStarted(true)
       setPaused(false)
       lastPublishedSnapshot = ""
+      lastOpponentBoard = ""
+      setOpponentBoardSeenAt(null)
       consumedAttackIds.clear()
       const high = untrack(() => state().highScore)
       const best = untrack(() => state().bestAttack)
@@ -1035,8 +1084,10 @@ export const TetrisBattle = (props: {
 
   const clearNetworkTimers = () => {
     if (publishTimer) clearInterval(publishTimer)
+    if (heartbeatTimer) clearInterval(heartbeatTimer)
     if (clockTimer) clearInterval(clockTimer)
     publishTimer = undefined
+    heartbeatTimer = undefined
     clockTimer = undefined
   }
 
@@ -1068,10 +1119,39 @@ export const TetrisBattle = (props: {
     }
   }
 
+  const resetToLobby = () => {
+    persist(state())
+    clearTimer()
+    clearCountdownStartTimer()
+    unsubscribeRoom?.()
+    unsubscribeRoom = undefined
+    consumedAttackIds.clear()
+    lastPublishedSnapshot = ""
+    lastOpponentBoard = ""
+    setConfirmAction(null)
+    setRoomCode("")
+    setRoom(null)
+    setReadyLocal(false)
+    setStarted(false)
+    setPaused(false)
+    setEditingRoomCode(false)
+    setPublishLatencyMs(null)
+    setOpponentBoardSeenAt(null)
+    setState(createInitialState(lastPersistedHighScore, lastPersistedBestAttack))
+  }
+
+  const leaveToLobby = () => {
+    const cx = client()
+    const code = roomCode()
+    if (cx && code) void cx.mutation(refs.leaveRoom, { code, playerId }).catch((err) => setError(err instanceof Error ? err.message : String(err)))
+    resetToLobby()
+  }
+
   onMount(() => {
     const code = roomCode()
     if (code) subscribeRoom(code)
     publishTimer = setInterval(() => void publishBoard(), 250)
+    heartbeatTimer = setInterval(sendHeartbeat, heartbeatMs)
     clockTimer = setInterval(() => {
       setNow(Date.now())
       if (roomStatus() === "countdown" && countdown() === "GO") requestStartMatch()
@@ -1133,9 +1213,35 @@ export const TetrisBattle = (props: {
       return
     }
 
+    const pendingConfirm = confirmAction()
+    if (pendingConfirm) {
+      prevent(evt)
+      if (isKey(evt, "escape", "esc")) {
+        setConfirmAction(null)
+        return
+      }
+      if (pendingConfirm === "quit" && isKey(evt, "q", "Q")) {
+        setConfirmAction(null)
+        close()
+        return
+      }
+      if (pendingConfirm === "lobby" && isKey(evt, "l", "L")) {
+        leaveToLobby()
+        return
+      }
+      setConfirmAction(null)
+      return
+    }
+
     if (isKey(evt, "q", "Q")) {
       prevent(evt)
-      close()
+      setConfirmAction("quit")
+      return
+    }
+
+    if (!isLobby() && isKey(evt, "l", "L")) {
+      prevent(evt)
+      setConfirmAction("lobby")
       return
     }
 
@@ -1276,6 +1382,12 @@ export const TetrisBattle = (props: {
         <text fg={theme().textMuted}>Room {roomCode() || "none"}</text>
         <text fg={theme().textMuted}>│</text>
         <text fg={conn() === "connected" ? theme().success : theme().warning}>{conn()}</text>
+        <Show when={opponent()}>
+          <text fg={theme().textMuted}>│</text>
+          <text fg={opponentDisconnected() ? theme().error : theme().success}>
+            {opponentDisconnected() ? `opponent lost ${formatLatency(opponentLastSeenAgeMs())}` : "opponent online"}
+          </text>
+        </Show>
       </box>
 
       <Show when={isLobby()}>
@@ -1312,6 +1424,11 @@ export const TetrisBattle = (props: {
           </Show>
           <text fg={theme().textMuted}>N create private room · J type room code · Enter join typed code · M matchmaking · R ready · Q quit</text>
           <text fg={theme().textMuted}>Each OpenCode window gets its own player id.</text>
+          <Show when={confirmMessage()}>
+            <text fg={theme().warning}>
+              <b>{confirmMessage()}</b>
+            </text>
+          </Show>
           <Show when={!convexUrl()}>
             <text fg={theme().error}>Convex backend URL missing.</text>
           </Show>
@@ -1388,6 +1505,8 @@ export const TetrisBattle = (props: {
           paddingRight={2}
           border
           borderColor={opponentBorderColor()}
+          title={opponentTitle()}
+          titleAlignment="center"
         >
           <text fg={theme().accent}>
             <b>OPPONENT            </b>
@@ -1416,6 +1535,16 @@ export const TetrisBattle = (props: {
           <Stat label="INCOMING" value={state().stats.incoming} color={theme().error} />
           <Stat label="COMBO" value={state().stats.combo} color={theme().accent} />
           <Stat label="OPP LINES" value={opponent()?.lines ?? 0} color={theme().warning} />
+          <box flexDirection="column" marginBottom={1}>
+            <text fg={theme().accent}>
+              <b>NET</b>
+            </text>
+            <text fg={theme().textMuted}>me {formatLatency(publishLatencyMs())}</text>
+            <text fg={theme().textMuted}>opp {formatLatency(opponentBoardAgeMs())}</text>
+            <Show when={opponentDisconnected()}>
+              <text fg={theme().error}>lost {formatLatency(opponentLastSeenAgeMs())}</text>
+            </Show>
+          </box>
           <text fg={theme().accent}>
             <b>GARBAGE</b>
           </text>
@@ -1431,6 +1560,7 @@ export const TetrisBattle = (props: {
             <Key label="SPACE" desc="hard drop" />
             <Key label="C" desc="hold" />
             <Key label="P" desc="pause" />
+            <Key label="L" desc="lobby" />
             <Key label="Q" desc="quit" />
           </box>
         </box>
@@ -1444,6 +1574,12 @@ export const TetrisBattle = (props: {
         paddingLeft={4}
         paddingRight={2}
       >
+        <Show when={confirmMessage()}>
+          <text fg={theme().warning}>
+            <b>{confirmMessage()}</b>
+          </text>
+        </Show>
+        <Show when={!confirmMessage()}>
         <Show
           when={state().won}
           fallback={
@@ -1453,9 +1589,19 @@ export const TetrisBattle = (props: {
                 <Show
                   when={paused()}
                   fallback={
-                    <text fg={theme().textMuted}>
-                      clear lines to cancel garbage or send attacks to opponent
-                    </text>
+                    <Show
+                      when={opponentDisconnected()}
+                      fallback={
+                        <text fg={theme().textMuted}>
+                          clear lines to cancel garbage or send attacks to opponent · L lobby · Q quit
+                        </text>
+                      }
+                    >
+                      <text fg={theme().error}>
+                        <b>OPPONENT CONNECTION LOST</b>
+                      </text>
+                      <text fg={theme().text}>last seen {formatLatency(opponentLastSeenAgeMs())} · L lobby · Q quit</text>
+                    </Show>
                   }
                 >
                   <text fg={theme().warning}>
@@ -1478,7 +1624,11 @@ export const TetrisBattle = (props: {
               <text fg={theme().accent}>
                 <b>R</b>
               </text>
-              <text fg={theme().text}>to restart,</text>
+              <text fg={theme().text}>for rematch,</text>
+              <text fg={theme().accent}>
+                <b>L</b>
+              </text>
+              <text fg={theme().text}>lobby,</text>
               <text fg={theme().accent}>
                 <b>Q</b>
               </text>
@@ -1497,9 +1647,14 @@ export const TetrisBattle = (props: {
           </text>
           <text fg={theme().text}>for rematch,</text>
           <text fg={theme().accent}>
+            <b>L</b>
+          </text>
+          <text fg={theme().text}>lobby,</text>
+          <text fg={theme().accent}>
             <b>Q</b>
           </text>
           <text fg={theme().text}>to quit</text>
+        </Show>
         </Show>
       </box>
       </box>
