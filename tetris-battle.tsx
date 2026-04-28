@@ -1008,62 +1008,6 @@ const HeroBanner = (props: { lines: readonly string[]; stops: RGBA[] }) => (
   </box>
 );
 
-// Rainbow hero — splash uses the 7-piece palette, one color per cluster of
-// non-space chars, like the canon's `rainbowPiecesBlock`.
-const RainbowHero = (props: { lines: readonly string[] }) => {
-  const colors = PIECE_ORDER.map((p) => PIECE[p]);
-  return (
-    <box flexDirection="column" alignItems="center">
-      <For each={props.lines as readonly string[]}>
-        {(line) => {
-          // Split the line into runs at space boundaries; alternate piece colors.
-          const segments: { text: string; color: RGBA | null }[] = [];
-          let buf = "";
-          let inWord = false;
-          let colorIdx = -1;
-          for (const ch of line) {
-            if (ch === " ") {
-              if (inWord) {
-                segments.push({
-                  text: buf,
-                  color: colors[colorIdx % colors.length]!,
-                });
-                buf = "";
-                inWord = false;
-              }
-              buf += ch;
-            } else {
-              if (!inWord) {
-                if (buf) segments.push({ text: buf, color: null });
-                buf = "";
-                inWord = true;
-                colorIdx = (colorIdx + 1) % colors.length;
-              }
-              buf += ch;
-            }
-          }
-          if (buf)
-            segments.push({
-              text: buf,
-              color: inWord ? colors[colorIdx % colors.length]! : null,
-            });
-          return (
-            <text>
-              <For each={segments}>
-                {(seg) => (
-                  <S fg={seg.color ?? C.faint}>
-                    <b>{seg.text}</b>
-                  </S>
-                )}
-              </For>
-            </text>
-          );
-        }}
-      </For>
-    </box>
-  );
-};
-
 // 7-piece tetromino accent strip. Used as a brand row between header and body.
 const PieceStrip = (props: { compact?: boolean }) => (
   <box flexDirection="row" alignItems="center">
@@ -2350,7 +2294,10 @@ export const TetrisBattle = (props: {
       <box paddingTop={1} paddingBottom={1}>
         <PieceStrip />
       </box>
-      <RainbowHero lines={FIGLET.TETRIS_BATTLE} />
+      <HeroBanner
+        lines={FIGLET.TETRIS_BATTLE}
+        stops={[C.cool, C.ink, C.accent, C.gold]}
+      />
       <text>
         <S fg={C.inkSoft}>
           <i>multiplayer · opencode tui</i>
@@ -3157,7 +3104,7 @@ export const TetrisBattle = (props: {
   return (
     <WindowChrome
       route={`/tetris-battle  ›  ${route()}${roomCode() ? `  ·  room ${roomCode()}` : ""}`}
-      version="v1.0.10"
+      version="v1.0.11"
       latencyMs={latencyBadge().text}
       latencyColor={latencyBadge().color}
     >
