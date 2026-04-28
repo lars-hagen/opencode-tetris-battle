@@ -838,10 +838,10 @@ const cellColor = (cell: DisplayCell, ghostPiece?: PieceType | null): RGBA => {
 const rivalGlyph = (cell: BoardCell): string =>
   cell === null ? "· " : cell === "garbage" ? "▓▓" : "██";
 
-const rivalColor = (cell: BoardCell, theme: TuiThemeCurrent): RGBA => {
-  if (cell === null) return theme.textMuted;
-  if (cell === "garbage") return garbageColor;
-  return pieceColors[cell];
+const rivalColor = (cell: BoardCell, _theme: TuiThemeCurrent): RGBA => {
+  if (cell === null) return C.empty;
+  if (cell === "garbage") return C.garbage;
+  return PIECE[cell];
 };
 
 const asString = (value: unknown, fallback: string): string => {
@@ -868,8 +868,7 @@ const createRoomCode = (): string => {
 const normalizeRoomCode = (code: string): string =>
   code
     .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]/g, "")
+    .replace(/[^0-9]/g, "")
     .slice(0, 4);
 
 const isEnterKey = (evt: ParsedKey): boolean => {
@@ -891,14 +890,31 @@ const getPlayerId = (): string => {
 
 // Render-only: turn a raw playerId into a SCREAMING_SNAKE handle that matches
 // the canon's `KASPAROV_BLOX` / `TSPIN_QUEEN` shape. Local player can override
-// with an explicit name, otherwise fall back to `PLAYER_XXXXXX`.
+// with an explicit name, otherwise fall back to `PLAYER_XXXXXX` (or
+// `PLAYER_UNKNOWN` when no id is available yet).
 const playerHandle = (id: string | undefined, override?: string): string => {
   if (override && override.trim()) return override.trim().toUpperCase();
-  if (!id) return "PLAYER_——————";
+  if (!id) return "PLAYER_UNKNOWN";
   return `PLAYER_${id.slice(0, 6).toUpperCase()}`;
 };
 
 const LOCAL_PLAYER_NAME = "LARS_HAGEN";
+
+// Backend `convex/tetris.ts` throws Title Case error strings; the plugin UI
+// is lowercase. Map known cases to canon-style copy and fall back to a
+// lowercased version of whatever else slips through.
+const ERROR_MAP: Record<string, string> = {
+  "room code already exists": "room code already exists · try again",
+  "room not found": "room not found · check the code",
+  "room is finished": "room is finished · pick a fresh one",
+  "room is full": "room is full · find another",
+  "player not in room": "player not in room · rejoin to continue",
+};
+const canonicalizeError = (msg: string): string => {
+  if (!msg) return "";
+  const lower = msg.toLowerCase().trim();
+  return ERROR_MAP[lower] ?? lower;
+};
 
 // ════════════════════════════════════════════════════════════════════════════
 // DESIGN LAYER — UI primitives + screens
@@ -1148,24 +1164,35 @@ const Panel = (props: {
   width?: number | "auto" | `${number}%`;
   flexGrow?: number;
   children: JSX.Element;
-}) => (
-  <box
-    flexDirection="column"
-    border
-    borderStyle="single"
-    borderColor={C.panelLine}
-    title={` ${props.title} `}
-    titleAlignment="left"
-    width={props.width}
-    flexGrow={props.flexGrow}
-    paddingLeft={1}
-    paddingRight={1}
-    paddingTop={0}
-    paddingBottom={0}
-  >
-    {props.children}
-  </box>
-);
+}) => {
+  // The opentui Box `title` prop renders the title baked into the top border
+  // and inherits the border color. Canon wants the title tinted in its own
+  // accent (e.g. green CREATE / blue JOIN / pink LOBBY) while the border
+  // stays in C.panelLine. Easiest path: skip the built-in title and render
+  // a bold tinted header row inside the panel, mimicking the canon's
+  // `┌─ TITLE ──┐` shape.
+  return (
+    <box
+      flexDirection="column"
+      border
+      borderStyle="single"
+      borderColor={C.panelLine}
+      width={props.width}
+      flexGrow={props.flexGrow}
+      paddingLeft={1}
+      paddingRight={1}
+      paddingTop={0}
+      paddingBottom={0}
+    >
+      <text>
+        <S fg={props.titleColor ?? C.inkSoft}>
+          <b>{props.title}</b>
+        </S>
+      </text>
+      {props.children}
+    </box>
+  );
+};
 
 // Canonical framed-box button — three lines, used on Victory + Pause.
 const FramedButton = (props: {
@@ -1454,18 +1481,21 @@ export const TetrisBattle = (props: {
       : "",
   );
   const inRoom = createMemo(() => Boolean(roomCode()) && Boolean(room()));
-  const isLobby = createMemo(
-    () =>
-      !roomCode() ||
-      (!inRoom() && !editingRoomCode() ? false : false) ||
-      (roomStatus() !== "active" && !started()),
-  );
-  // We split `isLobby` into more granular routes for the design.
+  // Route memo (below) drives all UI gating; we do not need a separate
+  // boolean for "is in lobby" because `route() === "lobby"` is the source.
+  // Route memo drives all UI gating below.
+  // Order matters: live game routes win over `over`, and an active waiting/
+  // countdown room snapshot must trump a stale `ended(state())` left over
+  // from the previous match (rematch flow). The local `state` is also reset
+  // in `restart()` so this can't happen, but the ordering is the belt.
   const route = createMemo<RouteState>(() => {
     if (!splashSeen()) return "splash";
     if (paused() && started() && roomStatus() === "active") return "paused";
     if (roomStatus() === "active" && started() && !ended(state()))
       return "match";
+    if (roomStatus() === "waiting" || roomStatus() === "countdown") {
+      return inRoom() ? "room" : "lobby";
+    }
     if (ended(state()) || roomStatus() === "done") return "over";
     if (inRoom()) return "room";
     return "lobby";
@@ -1501,6 +1531,17 @@ export const TetrisBattle = (props: {
     const ms = Math.max(0, Math.round(lat));
     return { text: `${ms}ms`, color: ms <= 60 ? C.ok : C.muted };
   });
+  // Connection state dot — derived from the live `conn()` signal so the
+  // status ribbon never lies about being connected when we're not.
+  const connBadge = createMemo(() => {
+    const c = conn();
+    if (c === "connected") return { color: C.ok, label: "connected" };
+    if (c === "connecting") return { color: C.warn, label: "connecting" };
+    return { color: C.bad, label: "disconnected" };
+  });
+  const ConnDot = () => (
+    <StateDot color={connBadge().color} label={connBadge().label} />
+  );
   const matchTimeText = createMemo(() => {
     const startedAt = room()?.room.startedAt;
     if (!startedAt) return "00:00";
@@ -1866,6 +1907,16 @@ export const TetrisBattle = (props: {
     if (cx && code) {
       setStarted(false);
       consumedAttackIds.clear();
+      // Reset the local board immediately so `ended(state())` flips to false
+      // before the rematch mutation round-trips. Without this the route memo
+      // sticks on `over` until the next active snapshot lands.
+      setState(
+        createInitialState(lastPersistedHighScore, lastPersistedBestAttack),
+      );
+      setPaused(false);
+      setOpponentBoardSeenAt(null);
+      lastPublishedSnapshot = "";
+      lastOpponentBoard = "";
       void runMutation(() =>
         cx.mutation(refs.rematch, { code, seed: createId(), playerId }),
       );
@@ -1956,9 +2007,14 @@ export const TetrisBattle = (props: {
   useKeyboard((evt) => {
     if (!props.api.ui.dialog.open) return;
 
-    // Splash — any key dismisses to lobby.
+    // Splash — [Q] quits, any other key dismisses to lobby. Q must win
+    // here so the splash hint stays honest.
     if (route() === "splash") {
       prevent(evt);
+      if (isKey(evt, "q", "Q")) {
+        close();
+        return;
+      }
       setSplashSeen(true);
       return;
     }
@@ -1977,8 +2033,8 @@ export const TetrisBattle = (props: {
         setRoomCode((code) => code.slice(0, -1));
         return;
       }
-      const key = evt.name.toUpperCase();
-      if (/^[A-Z0-9]$/.test(key) && roomCode().length < 4)
+      const key = evt.name;
+      if (/^[0-9]$/.test(key) && roomCode().length < 4)
         setRoomCode((code) => normalizeRoomCode(code + key));
       return;
     }
@@ -2059,9 +2115,12 @@ export const TetrisBattle = (props: {
       return;
     }
 
+    // While paused, only [P]/[L]/[Q] do anything; other keys are no-ops so
+    // a stray keystroke can't unfreeze the match. [L] and [Q] already drop
+    // through to their handlers above (confirm flow), so here we just
+    // swallow everything else.
     if (paused()) {
       prevent(evt);
-      resume();
       return;
     }
 
@@ -2288,11 +2347,7 @@ export const TetrisBattle = (props: {
   // ─── Splash screen ────────────────────────────────────────────────────────
   const SplashScreen = () => (
     <box flexDirection="column" alignItems="center" paddingTop={1}>
-      <StatusRibbon
-        state="READY"
-        stateColor={C.accent}
-        right={<StateDot color={C.ok} label="connected" />}
-      />
+      <StatusRibbon state="READY" stateColor={C.accent} right={<ConnDot />} />
       <box paddingTop={1} paddingBottom={1}>
         <PieceStrip />
       </box>
@@ -2358,7 +2413,7 @@ export const TetrisBattle = (props: {
             <S fg={C.faint}> ({playerHandle(playerId, LOCAL_PLAYER_NAME)})</S>
           </text>
         }
-        right={<StateDot color={C.ok} label="connected" />}
+        right={<ConnDot />}
       />
       <box paddingTop={1} paddingBottom={1} alignItems="center">
         <HeroBanner lines={FIGLET.LOBBY} stops={[C.accent, C.info, C.cool]} />
@@ -2455,10 +2510,10 @@ export const TetrisBattle = (props: {
               </box>
               <box paddingTop={1}>
                 <text>
-                  <S fg={C.ink}>
-                    <b>[M]</b>
-                  </S>
-                  <S fg={C.muted}> match again to cancel</S>
+                  {/* Quick-match has no real cancel path against the current
+                      backend, so we surface neutral status instead of a
+                      false promise. */}
+                  <S fg={C.muted}>auto-pairs you with the next ready foe</S>
                 </text>
               </box>
             </box>
@@ -2504,7 +2559,7 @@ export const TetrisBattle = (props: {
       <Show when={error()}>
         <box paddingTop={1}>
           <text>
-            <S fg={C.bad}>{error()}</S>
+            <S fg={C.bad}>{canonicalizeError(error())}</S>
           </text>
         </box>
       </Show>
@@ -2546,7 +2601,7 @@ export const TetrisBattle = (props: {
             </Show>
           </text>
         }
-        right={<StateDot color={C.ok} label="connected" />}
+        right={<ConnDot />}
       />
       <box paddingTop={2} alignItems="center">
         <text>
@@ -2634,7 +2689,7 @@ export const TetrisBattle = (props: {
       <Show when={error()}>
         <box paddingTop={1}>
           <text>
-            <S fg={C.bad}>{error()}</S>
+            <S fg={C.bad}>{canonicalizeError(error())}</S>
           </text>
         </box>
       </Show>
@@ -3044,7 +3099,10 @@ export const TetrisBattle = (props: {
                   <S fg={isWin() ? C.win : C.loss}>
                     <b>{isWin() ? "WINNER" : "DEFEATED"}</b>
                   </S>
-                  <S fg={C.muted}> {playerHandle(playerId, LOCAL_PLAYER_NAME)} (you)</S>
+                  <S fg={C.muted}>
+                    {" "}
+                    {playerHandle(playerId, LOCAL_PLAYER_NAME)} (you)
+                  </S>
                 </text>
                 <YourBoard />
               </box>
