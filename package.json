@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "opencode-tetris-battle",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Multiplayer Tetris Battle plugin for OpenCode TUI",
   "type": "module",
   "license": "MIT",
