@@ -16,13 +16,17 @@ import {
   type JSX,
 } from "solid-js";
 
-// `<span>` in @opentui/solid is typed against an empty options object even
-// though TextNodeRenderable accepts `fg`/`bg` at runtime. We use inline color
-// runs heavily for the design canon, so we wrap the cast in one helper and
-// stop fighting the typings.
+// `<span>` in @opentui/solid maps `style.fg`/`style.bg` onto the underlying
+// TextNodeRenderable; bare `fg=`/`bg=` props are silently dropped at runtime
+// (see solid/index.js setProperty: only `style`/`href`/`on:` survive on text
+// nodes). We use inline color runs heavily for the design canon, so we wrap
+// the call in one helper that always feeds `style`.
 type SpanColorProps = { fg?: RGBA; bg?: RGBA; children: JSX.Element };
 const S = (props: SpanColorProps): JSX.Element => {
-  const extra = { fg: props.fg, bg: props.bg } as Record<string, unknown>;
+  const style: Record<string, unknown> = {};
+  if (props.fg) style.fg = props.fg;
+  if (props.bg) style.bg = props.bg;
+  const extra = { style } as Record<string, unknown>;
   return <span {...extra}>{props.children}</span>;
 };
 
@@ -1100,6 +1104,9 @@ const WindowChrome = (props: {
       alignItems="center"
       paddingTop={0}
       paddingBottom={0}
+      borderStyle="single"
+      border={["bottom"]}
+      borderColor={C.panelLine}
     >
       <text>
         <S fg={C.dotRed}>●</S>
@@ -1117,14 +1124,6 @@ const WindowChrome = (props: {
         <S fg={props.latencyColor ?? C.muted}>{props.latencyMs}</S>
       </text>
     </box>
-    <box
-      flexDirection="row"
-      paddingTop={0}
-      paddingBottom={0}
-      borderStyle="single"
-      border={["top"]}
-      borderColor={C.panelLine}
-    />
     {props.children}
   </box>
 );
@@ -3158,7 +3157,7 @@ export const TetrisBattle = (props: {
   return (
     <WindowChrome
       route={`/tetris-battle  ›  ${route()}${roomCode() ? `  ·  room ${roomCode()}` : ""}`}
-      version="v1.0.8"
+      version="v1.0.10"
       latencyMs={latencyBadge().text}
       latencyColor={latencyBadge().color}
     >
