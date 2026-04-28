@@ -1008,19 +1008,6 @@ const HeroBanner = (props: { lines: readonly string[]; stops: RGBA[] }) => (
   </box>
 );
 
-// 7-piece tetromino accent strip. Used as a brand row between header and body.
-const PieceStrip = (props: { compact?: boolean }) => (
-  <box flexDirection="row" alignItems="center">
-    <For each={PIECE_ORDER}>
-      {(p) => (
-        <text fg={PIECE[p]}>
-          <b>{props.compact ? "███" : "██████"}</b>
-        </text>
-      )}
-    </For>
-  </box>
-);
-
 // Window chrome: rounded outer border with mac dots, breadcrumb, latency.
 // Implemented as two pieces — a styled top bar above a `border` box body.
 const WindowChrome = (props: {
@@ -2291,13 +2278,12 @@ export const TetrisBattle = (props: {
   const SplashScreen = () => (
     <box flexDirection="column" alignItems="center" paddingTop={1}>
       <StatusRibbon state="READY" stateColor={C.accent} right={<ConnDot />} />
-      <box paddingTop={1} paddingBottom={1}>
-        <PieceStrip />
+      <box paddingTop={2}>
+        <HeroBanner
+          lines={FIGLET.TETRIS_BATTLE}
+          stops={[C.cool, C.ink, C.accent, C.gold]}
+        />
       </box>
-      <HeroBanner
-        lines={FIGLET.TETRIS_BATTLE}
-        stops={[C.cool, C.ink, C.accent, C.gold]}
-      />
       <text>
         <S fg={C.inkSoft}>
           <i>multiplayer · opencode tui</i>
@@ -2308,15 +2294,6 @@ export const TetrisBattle = (props: {
           <For each={PIECE_ORDER}>{(p) => <PreviewBlock type={p} />}</For>
         </box>
       </box>
-      <text>
-        <S fg={C.accent}>
-          <b>▶ </b>
-        </S>
-        <S fg={C.ink}>
-          <b>[ANY]</b>
-        </S>
-        <S fg={C.muted}> enter lobby</S>
-      </text>
       <box paddingTop={1}>
         <text>
           <S fg={C.muted}>HIGH_SCORE </S>
@@ -2354,9 +2331,8 @@ export const TetrisBattle = (props: {
           <text>
             <S fg={C.muted}>signed in as </S>
             <S fg={C.ink}>
-              <b>LARS_HAGEN</b>
+              <b>{playerHandle(playerId, LOCAL_PLAYER_NAME)}</b>
             </S>
-            <S fg={C.faint}> ({playerHandle(playerId, LOCAL_PLAYER_NAME)})</S>
           </text>
         }
         right={<ConnDot />}
@@ -2373,10 +2349,7 @@ export const TetrisBattle = (props: {
           body={() => (
             <box flexDirection="column">
               <text>
-                <S fg={C.muted}>generate a fresh room code</S>
-              </text>
-              <text>
-                <S fg={C.muted}>share it with your opponent</S>
+                <S fg={C.muted}>fresh room code · share with foe</S>
               </text>
               <box paddingTop={1}>
                 <box flexDirection="row" gap={1}>
@@ -2384,13 +2357,7 @@ export const TetrisBattle = (props: {
                   <DigitSlot value={roomCode()[1] ?? ""} color={C.win} />
                   <DigitSlot value={roomCode()[2] ?? ""} color={C.win} />
                   <DigitSlot value={roomCode()[3] ?? ""} color={C.win} />
-                  <text>
-                    <S fg={C.muted}> preview</S>
-                  </text>
                 </box>
-              </box>
-              <box paddingTop={1}>
-                <StateDot color={C.ok} label="ready when you are" />
               </box>
             </box>
           )}
@@ -2403,26 +2370,10 @@ export const TetrisBattle = (props: {
           body={() => (
             <box flexDirection="column">
               <text>
-                <S fg={C.muted}>type the room code</S>
-              </text>
-              <text>
-                <S fg={C.muted}>your opponent shared</S>
+                <S fg={C.muted}>type the code your foe shared</S>
               </text>
               <box paddingTop={1}>
                 <JoinSlots />
-              </box>
-              <box paddingTop={1}>
-                <text>
-                  <S fg={C.muted}>↵ </S>
-                  <S fg={C.ink}>
-                    <b>[ENTER]</b>
-                  </S>
-                  <S fg={C.muted}> join · </S>
-                  <S fg={C.ink}>
-                    <b>[ESC]</b>
-                  </S>
-                  <S fg={C.muted}> cancel</S>
-                </text>
               </box>
             </box>
           )}
@@ -2435,31 +2386,17 @@ export const TetrisBattle = (props: {
           body={() => (
             <box flexDirection="column">
               <text>
-                <S fg={C.muted}>quick match — find a worthy</S>
-              </text>
-              <text>
-                <S fg={C.muted}>stranger to crush</S>
+                <S fg={C.muted}>auto-pair with the next ready foe</S>
               </text>
               <box paddingTop={1}>
                 <text>
-                  <Show
-                    when={busy()}
-                    fallback={<S fg={C.muted}>idle · [M] queue</S>}
-                  >
+                  <Show when={busy()} fallback={<S fg={C.muted}>idle</S>}>
                     <S fg={C.warn}>
                       <b>◐</b>
                     </S>
                     <S fg={C.ink}> searching</S>
                     <S fg={C.muted}>...</S>
                   </Show>
-                </text>
-              </box>
-              <box paddingTop={1}>
-                <text>
-                  {/* Quick-match has no real cancel path against the current
-                      backend, so we surface neutral status instead of a
-                      false promise. */}
-                  <S fg={C.muted}>auto-pairs you with the next ready foe</S>
                 </text>
               </box>
             </box>
@@ -2478,11 +2415,6 @@ export const TetrisBattle = (props: {
             <S fg={C.ink}>
               <b>READY</b>
             </S>
-            <S fg={C.muted}> · </S>
-            <S fg={C.ink}>
-              <b>[R]</b>
-            </S>
-            <S fg={C.muted}> unready</S>
           </text>
         </box>
       </Show>
@@ -2527,25 +2459,23 @@ export const TetrisBattle = (props: {
   const RoomScreen = () => (
     <box flexDirection="column" paddingTop={1} paddingBottom={1}>
       <StatusRibbon
-        state={roomStatus() === "countdown" ? "COUNTDOWN" : "READY"}
+        state={roomStatus() === "countdown" ? "COUNTDOWN" : "WAITING"}
         stateColor={roomStatus() === "countdown" ? C.warn : C.accent}
         middle={
-          <text>
-            <S fg={C.muted}>ROOM </S>
-            <S fg={PIECE.I}>
-              <b>{roomCode()}</b>
-            </S>
-            <Show when={roomStatus() === "countdown"}>
-              <S fg={C.faint}> · </S>
+          <Show
+            when={roomStatus() === "countdown"}
+            fallback={
+              <text>
+                <S fg={C.muted}>● waiting for opponent</S>
+              </text>
+            }
+          >
+            <text>
               <S fg={C.warn}>
                 <b>starting in {countdown()}</b>
               </S>
-            </Show>
-            <Show when={roomStatus() !== "countdown"}>
-              <S fg={C.faint}> · </S>
-              <S fg={C.muted}>● waiting for opponent</S>
-            </Show>
-          </text>
+            </text>
+          </Show>
         }
         right={<ConnDot />}
       />
@@ -2574,18 +2504,6 @@ export const TetrisBattle = (props: {
             <text>
               <S fg={C.muted}>{playerHandle(playerId, LOCAL_PLAYER_NAME)}</S>
             </text>
-            <text>
-              <S fg={C.faint}>side </S>
-              <S fg={C.inkSoft}>{me()?.side ?? "host"}</S>
-            </text>
-            <box paddingTop={1}>
-              <text>
-                <S fg={C.ink}>
-                  <b>[R]</b>
-                </S>
-                <S fg={C.muted}> {ready() ? "unready" : "ready up"}</S>
-              </text>
-            </box>
           </Panel>
           {/* Opponent slot */}
           <Panel title="OPPONENT" titleColor={C.loss} flexGrow={1}>
@@ -2595,14 +2513,8 @@ export const TetrisBattle = (props: {
                 <box flexDirection="column">
                   <text>
                     <S fg={C.faint}>
-                      <b>○ EMPTY</b>
+                      <b>○ waiting for challenger</b>
                     </S>
-                  </text>
-                  <text>
-                    <S fg={C.muted}>share the room code</S>
-                  </text>
-                  <text>
-                    <S fg={C.muted}>and wait for a challenger</S>
                   </text>
                 </box>
               }
@@ -2614,10 +2526,6 @@ export const TetrisBattle = (props: {
               </text>
               <text>
                 <S fg={C.muted}>{playerHandle(opponent()?.playerId)}</S>
-              </text>
-              <text>
-                <S fg={C.faint}>side </S>
-                <S fg={C.inkSoft}>{opponent()?.side ?? ""}</S>
               </text>
             </Show>
           </Panel>
@@ -2686,9 +2594,6 @@ export const TetrisBattle = (props: {
           </text>
         }
       />
-      <box paddingTop={1} paddingBottom={0}>
-        <PieceStrip compact />
-      </box>
       <box flexDirection="row" gap={2} paddingTop={1} alignItems="flex-start">
         {/* Left rail: HOLD + STATS */}
         <box flexDirection="column" gap={1} minWidth={18}>
@@ -2711,12 +2616,6 @@ export const TetrisBattle = (props: {
               label="LINES"
               value={state().lines}
               color={C.ink}
-              inline
-            />
-            <StatLine
-              label="APM"
-              value={state().stats.pieces}
-              color={C.cool}
               inline
             />
             <StatLine
@@ -2798,12 +2697,6 @@ export const TetrisBattle = (props: {
                   )}
                 </For>
               </box>
-              <text>
-                <S fg={C.muted}>incoming </S>
-                <S fg={C.bad}>
-                  <b>{state().stats.incoming}</b>
-                </S>
-              </text>
             </Panel>
           </box>
         </box>
@@ -2849,32 +2742,14 @@ export const TetrisBattle = (props: {
         stateColor={C.warn}
         middle={
           <text>
-            <S fg={C.muted}>ROOM </S>
-            <S fg={C.faint}>{roomCode()}</S>
-            <S fg={C.faint}> TIME </S>
-            <S fg={C.faint}>{matchTimeText()} (frozen)</S>
+            <S fg={C.muted}>TIME </S>
+            <S fg={C.faint}>{matchTimeText()}</S>
           </text>
         }
         right={<StateDot color={C.warn} label="paused" />}
       />
-      {/* Dimmed underlay hint — board side strips. */}
-      <box
-        paddingTop={1}
-        paddingBottom={1}
-        flexDirection="row"
-        gap={4}
-        alignItems="center"
-      >
-        <For each={[0, 1, 2, 3, 4, 5, 6, 7]}>
-          {() => (
-            <text>
-              <S fg={C.dim}>┃</S>
-            </text>
-          )}
-        </For>
-      </box>
       {/* Modal — rounded pink box with drop shadow on right edge. */}
-      <box flexDirection="row" alignItems="flex-start">
+      <box flexDirection="row" alignItems="flex-start" paddingTop={2}>
         <box
           flexDirection="column"
           border
@@ -2898,12 +2773,7 @@ export const TetrisBattle = (props: {
               <i>match suspended · heartbeat held</i>
             </S>
           </text>
-          <box flexDirection="row" gap={3} paddingTop={1} paddingBottom={1}>
-            <PreviewBlock type="T" />
-            <PreviewBlock type="T" />
-            <PreviewBlock type="T" />
-          </box>
-          <box flexDirection="row" gap={1}>
+          <box flexDirection="row" gap={1} paddingTop={2}>
             <FramedButton keyLabel="P" label="RESUME" color={C.win} />
             <FramedButton keyLabel="L" label="LOBBY" color={C.info} />
             <FramedButton keyLabel="Q" label="QUIT" color={C.loss} />
@@ -2985,7 +2855,7 @@ export const TetrisBattle = (props: {
             <S fg={C.muted}>
               <i>
                 {isWin()
-                  ? `score ${state().score} · ${state().lines} lines · ${state().stats.sent} sent`
+                  ? "you outpaced your opponent — run it back"
                   : "you topped out — review the stack and run it back"}
               </i>
             </S>
@@ -3047,7 +2917,7 @@ export const TetrisBattle = (props: {
                   </S>
                   <S fg={C.muted}>
                     {" "}
-                    {playerHandle(playerId, LOCAL_PLAYER_NAME)} (you)
+                    {playerHandle(playerId, LOCAL_PLAYER_NAME)}
                   </S>
                 </text>
                 <YourBoard />
@@ -3089,14 +2959,6 @@ export const TetrisBattle = (props: {
             ]}
           />
         </box>
-        <box alignItems="center">
-          <text>
-            <S fg={C.muted}>
-              rematch keeps the room · lobby disconnects · press [R] to run it
-              back
-            </S>
-          </text>
-        </box>
       </box>
     );
   };
@@ -3104,7 +2966,7 @@ export const TetrisBattle = (props: {
   return (
     <WindowChrome
       route={`/tetris-battle  ›  ${route()}${roomCode() ? `  ·  room ${roomCode()}` : ""}`}
-      version="v1.0.11"
+      version="v1.0.12"
       latencyMs={latencyBadge().text}
       latencyColor={latencyBadge().color}
     >
