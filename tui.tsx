@@ -104,14 +104,53 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
     api.ui.dialog.setSize("xlarge");
   };
 
+  const runUpdate = async () => {
+    api.ui.toast({
+      variant: "info",
+      title: "Tetris Battle",
+      message: `checking for updates · current v${currentVersion}`,
+    });
+    const latest = await fetchLatestVersion();
+    if (!latest) {
+      api.ui.toast({
+        variant: "warning",
+        title: "Tetris Battle",
+        message: "could not reach npm registry",
+      });
+      return;
+    }
+    if (!isOlder(currentVersion, latest)) {
+      api.ui.toast({
+        variant: "success",
+        title: "Tetris Battle",
+        message: `already on v${currentVersion} · latest is v${latest}`,
+      });
+      return;
+    }
+    await installUpdate(latest);
+  };
+
   const unregister = api.command.register(() => [
     {
+      // The slash field is intentionally absent. The server plugin
+      // registers `tetris-battle` as a real opencode command (so it can
+      // accept "update" as an argument) and bridges back to this entry
+      // by value via client.tui.executeCommand.
       title: "Tetris Battle",
       value: "opencode.tetris.battle",
       category: "Game",
-      slash: { name: "tetris-battle" },
       onSelect() {
         open();
+      },
+    },
+    {
+      // No slash either — only triggered via the server plugin's
+      // "tetris-battle update" path or the splash [U] key.
+      title: "Tetris Battle · update",
+      value: "opencode.tetris.battle.update",
+      category: "Game",
+      onSelect() {
+        void runUpdate();
       },
     },
   ]);
