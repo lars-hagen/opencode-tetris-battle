@@ -45,4 +45,4 @@ jobs:
           echo "Publishing $name@$version"
 
       - name: Publish to npm
-        run: npm publish --access public --provenance
+        run: npm publish --access public --provenance --ignore-scripts
