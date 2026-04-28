@@ -26,7 +26,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "convex:dev": "convex dev",
     "convex:deploy": "convex deploy",
-    "prepack": "bun run typecheck"
+    "prepack": "bun run typecheck",
+    "release:patch": "bun run typecheck && npm version patch && git push && git push --tags",
+    "release:minor": "bun run typecheck && npm version minor && git push && git push --tags",
+    "release:major": "bun run typecheck && npm version major && git push && git push --tags"
   },
   "files": [
     "README.md",
