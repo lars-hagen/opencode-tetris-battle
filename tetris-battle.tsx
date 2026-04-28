@@ -1470,13 +1470,15 @@ export const TetrisBattle = (props: {
   // status ribbon never lies about being connected when we're not.
   const connBadge = createMemo(() => {
     const c = conn();
-    if (c === "connected") return { color: C.ok, label: "connected" };
+    if (c === "connected") return null;
     if (c === "connecting") return { color: C.warn, label: "connecting" };
     return { color: C.bad, label: "disconnected" };
   });
-  const ConnDot = () => (
-    <StateDot color={connBadge().color} label={connBadge().label} />
-  );
+  const ConnDot = () => {
+    const badge = connBadge();
+    if (!badge) return null;
+    return <StateDot color={badge.color} label={badge.label} />;
+  };
   const matchTimeText = createMemo(() => {
     const startedAt = room()?.room.startedAt;
     if (!startedAt) return "00:00";
@@ -2282,7 +2284,7 @@ export const TetrisBattle = (props: {
   // ─── Splash screen ────────────────────────────────────────────────────────
   const SplashScreen = () => (
     <box flexDirection="column" alignItems="center" paddingTop={1}>
-      <StatusRibbon state="IDLE" stateColor={C.muted} right={<ConnDot />} />
+      <StatusRibbon state="IDLE" stateColor={C.muted} />
       <box paddingTop={2}>
         <HeroBanner
           lines={FIGLET.TETRIS_BATTLE}
@@ -2971,7 +2973,7 @@ export const TetrisBattle = (props: {
   return (
     <WindowChrome
       route={`/tetris-battle  ›  ${route()}${roomCode() ? `  ·  room ${roomCode()}` : ""}`}
-      version="v1.0.14"
+      version="v1.0.15"
       latencyMs={latencyBadge().text}
       latencyColor={latencyBadge().color}
     >
