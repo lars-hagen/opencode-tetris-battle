@@ -55,47 +55,21 @@ const isOlder = (a: string, b: string): boolean => {
 
 const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
   if (!enabled(options)) return;
-  const open = () => {
-    api.ui.dialog.replace(() => (
-      <TetrisBattle
-        api={api}
-        convexUrlKey={convexUrlKey}
-        defaultConvexUrl={defaultConvexUrl}
-        onClose={() => api.ui.dialog.clear()}
-      />
-    ));
-    api.ui.dialog.setSize("xlarge");
+
+  const checkUpdate = async () => {
+    const latest = await fetchLatestVersion();
+    if (!latest) return null;
+    if (!isOlder(currentVersion, latest)) return null;
+    return latest;
   };
 
-  const update = async () => {
+  const installUpdate = async (version: string) => {
     api.ui.toast({
       variant: "info",
       title: "Tetris Battle",
-      message: `checking for updates · current v${currentVersion}`,
+      message: `installing v${version}...`,
     });
-    const latest = await fetchLatestVersion();
-    if (!latest) {
-      api.ui.toast({
-        variant: "warning",
-        title: "Tetris Battle",
-        message: "could not reach npm registry",
-      });
-      return;
-    }
-    if (!isOlder(currentVersion, latest)) {
-      api.ui.toast({
-        variant: "success",
-        title: "Tetris Battle",
-        message: `already on v${currentVersion} · latest is v${latest}`,
-      });
-      return;
-    }
-    api.ui.toast({
-      variant: "info",
-      title: "Tetris Battle",
-      message: `installing v${latest}...`,
-    });
-    const result = await api.plugins.install(`${npmName}@${latest}`, {
+    const result = await api.plugins.install(`${npmName}@${version}`, {
       global: true,
     });
     if (!result.ok) {
@@ -104,14 +78,30 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
         title: "Tetris Battle",
         message: result.message,
       });
-      return;
+      return false;
     }
     api.ui.toast({
       variant: "success",
       title: "Tetris Battle",
-      message: `installed v${latest} · restart opencode to load`,
+      message: `installed v${version} · restart opencode to load`,
       duration: 8000,
     });
+    return true;
+  };
+
+  const open = () => {
+    api.ui.dialog.replace(() => (
+      <TetrisBattle
+        api={api}
+        convexUrlKey={convexUrlKey}
+        defaultConvexUrl={defaultConvexUrl}
+        currentVersion={currentVersion}
+        checkUpdate={checkUpdate}
+        installUpdate={installUpdate}
+        onClose={() => api.ui.dialog.clear()}
+      />
+    ));
+    api.ui.dialog.setSize("xlarge");
   };
 
   const unregister = api.command.register(() => [
@@ -122,16 +112,6 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
       slash: { name: "tetris-battle" },
       onSelect() {
         open();
-      },
-    },
-    {
-      title: "Tetris Battle · update",
-      description: `check npm for a newer version (current v${currentVersion})`,
-      value: "opencode.tetris.battle.update",
-      category: "Game",
-      slash: { name: "tetris-battle-update" },
-      onSelect() {
-        update();
       },
     },
   ]);

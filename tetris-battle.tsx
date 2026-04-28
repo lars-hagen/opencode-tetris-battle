@@ -1341,6 +1341,9 @@ export const TetrisBattle = (props: {
   api: TuiPluginApi;
   convexUrlKey: string;
   defaultConvexUrl: string;
+  currentVersion: string;
+  checkUpdate: () => Promise<string | null>;
+  installUpdate: (version: string) => Promise<boolean>;
   onClose: () => void;
 }) => {
   const playerId = getPlayerId();
@@ -1364,6 +1367,10 @@ export const TetrisBattle = (props: {
     number | null
   >(null);
   const [splashSeen, setSplashSeen] = createSignal(false);
+  const [updateAvailable, setUpdateAvailable] = createSignal<string | null>(
+    null,
+  );
+  const [updating, setUpdating] = createSignal(false);
   const [state, setState] = createSignal(
     createInitialState(
       asSavedNumber(props.api.kv.get(highScoreKey, 0)),
@@ -1905,6 +1912,11 @@ export const TetrisBattle = (props: {
       if (roomStatus() === "countdown" && countdown() === "GO")
         requestStartMatch();
     }, 100);
+    // Silently check npm for a newer version. If found, the splash will
+    // surface a [U] update hint. Failures are swallowed — no toast spam.
+    void props.checkUpdate().then((latest) => {
+      if (latest) setUpdateAvailable(latest);
+    });
   });
   onCleanup(() => {
     persist(state());
@@ -1944,12 +1956,22 @@ export const TetrisBattle = (props: {
   useKeyboard((evt) => {
     if (!props.api.ui.dialog.open) return;
 
-    // Splash — [Q] quits, any other key dismisses to lobby. Q must win
-    // here so the splash hint stays honest.
+    // Splash — [Q] quits, [U] runs update if one is available, any other
+    // key dismisses to lobby. Q/U must win here so the splash hint stays
+    // honest.
     if (route() === "splash") {
       prevent(evt);
       if (isKey(evt, "q", "Q")) {
         close();
+        return;
+      }
+      if (isKey(evt, "u", "U") && updateAvailable() && !updating()) {
+        const v = updateAvailable()!;
+        setUpdating(true);
+        void props.installUpdate(v).then((ok) => {
+          setUpdating(false);
+          if (ok) setUpdateAvailable(null);
+        });
         return;
       }
       setSplashSeen(true);
@@ -2317,10 +2339,29 @@ export const TetrisBattle = (props: {
           <S fg={C.cool}>{playerHandle(playerId, LOCAL_PLAYER_NAME)}</S>
         </text>
       </box>
+      <Show when={updateAvailable()}>
+        <box paddingTop={1}>
+          <text>
+            <S fg={C.warn}>
+              <b>↑ </b>
+            </S>
+            <S fg={C.muted}>update available · </S>
+            <S fg={C.warn}>
+              <b>v{updateAvailable()}</b>
+            </S>
+            <Show when={updating()}>
+              <S fg={C.muted}> · installing...</S>
+            </Show>
+          </text>
+        </box>
+      </Show>
       <box paddingTop={1} alignItems="center">
         <HintBar
           items={[
             { key: "ANY", verb: "enter" },
+            ...(updateAvailable() && !updating()
+              ? [{ key: "U", verb: "update" }]
+              : []),
             { key: "Q", verb: "quit" },
           ]}
         />
@@ -2973,7 +3014,7 @@ export const TetrisBattle = (props: {
   return (
     <WindowChrome
       route={`/tetris-battle  ›  ${route()}${roomCode() ? `  ·  room ${roomCode()}` : ""}`}
-      version="v1.0.15"
+      version="v1.0.16"
       latencyMs={latencyBadge().text}
       latencyColor={latencyBadge().color}
     >
