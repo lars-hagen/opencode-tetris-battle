@@ -1070,6 +1070,7 @@ const StatusRibbon = (props: {
     flexDirection="row"
     justifyContent="space-between"
     alignItems="center"
+    width="100%"
     paddingTop={0}
     paddingBottom={0}
   >
@@ -1082,8 +1083,12 @@ const StatusRibbon = (props: {
         <b>{props.state}</b>
       </S>
     </text>
-    <Show when={props.middle}>{props.middle}</Show>
-    <Show when={props.right}>{props.right}</Show>
+    <Show when={props.middle} fallback={<text> </text>}>
+      {props.middle}
+    </Show>
+    <Show when={props.right} fallback={<text> </text>}>
+      {props.right}
+    </Show>
   </box>
 );
 
@@ -2277,7 +2282,7 @@ export const TetrisBattle = (props: {
   // ─── Splash screen ────────────────────────────────────────────────────────
   const SplashScreen = () => (
     <box flexDirection="column" alignItems="center" paddingTop={1}>
-      <StatusRibbon state="READY" stateColor={C.accent} right={<ConnDot />} />
+      <StatusRibbon state="IDLE" stateColor={C.muted} right={<ConnDot />} />
       <box paddingTop={2}>
         <HeroBanner
           lines={FIGLET.TETRIS_BATTLE}
@@ -2966,7 +2971,7 @@ export const TetrisBattle = (props: {
   return (
     <WindowChrome
       route={`/tetris-battle  ›  ${route()}${roomCode() ? `  ·  room ${roomCode()}` : ""}`}
-      version="v1.0.12"
+      version="v1.0.13"
       latencyMs={latencyBadge().text}
       latencyColor={latencyBadge().color}
     >
