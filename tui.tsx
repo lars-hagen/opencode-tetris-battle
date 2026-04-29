@@ -130,45 +130,24 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
     await installUpdate(latest);
   };
 
-  // Direct bus subscription bypasses the `command.trigger` registry path,
-  // which has a race: the server's `command.execute.before` can fire before
-  // this plugin's `command.register` callback has populated `entries()`,
-  // and `command.trigger` then silently falls through. Toast bridge works
-  // because toasts skip the registry. Mirror that pattern: listen for the
-  // CommandExecute bus event ourselves and dispatch directly. Toasts here
-  // are also instrumentation — if you can see the magenta toast, the bus
-  // event reached us. If it does not appear, the workspace/directory
-  // filter in context/event.ts:16-30 is dropping the event.
-  api.ui.toast({
-    variant: "info",
-    title: "Tetris Battle",
-    message: `plugin v${currentVersion} loaded · bus listener armed`,
-    duration: 3000,
-  });
-  const unsubBus = api.event.on("tui.command.execute", (evt) => {
-    const target = evt.properties.command;
-    api.ui.toast({
-      variant: "info",
-      title: "Tetris Battle bridge",
-      message: `bus → ${target}`,
-      duration: 4000,
-    });
-    if (target === "opencode.tetris.battle") open();
-    else if (target === "opencode.tetris.battle.update") void runUpdate();
-  });
-  api.lifecycle.onDispose(unsubBus);
-
+  // Two slash commands rather than one with a subcommand. The
+  // server-side bridge approach (server registers `tetris-battle` as a
+  // real opencode command, parses `update` as an arg, calls
+  // `client.tui.executeCommand` to dispatch back to the TUI) was
+  // pursued through 1.0.17–1.0.25 and proved unreliable: the bus
+  // envelope arriving at the TUI plugin had `properties: {}` despite
+  // the server publishing with `{command: "..."}`. Built-in TUI
+  // command triggering works on the same bus path, but our plugin's
+  // listener consistently saw the field stripped. Rather than continue
+  // debugging cross-process serialisation, we mirror what battle-tested
+  // plugins (opencode-secrets) do: register two separate slash
+  // commands, no server bridge, no event subscription.
   const unregister = api.command.register(() => [
     {
-      // No `slash` field — server plugin (index.ts) registers
-      // `tetris-battle` as a real opencode command. The Ctrl+P
-      // command palette still surfaces these entries by title/value
-      // for keyboard-shortcut discoverability, but actual dispatch
-      // happens through the direct event subscription above, not
-      // command.trigger.
       title: "Tetris Battle",
       value: "opencode.tetris.battle",
       category: "Game",
+      slash: { name: "tetris-battle" },
       onSelect() {
         open();
       },
@@ -177,6 +156,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
       title: "Tetris Battle · update",
       value: "opencode.tetris.battle.update",
       category: "Game",
+      slash: { name: "tetris-battle-update" },
       onSelect() {
         void runUpdate();
       },
