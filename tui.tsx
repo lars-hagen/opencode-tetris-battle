@@ -132,20 +132,24 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
 
   const unregister = api.command.register(() => [
     {
-      // The slash field is intentionally absent. The server plugin
-      // registers `tetris-battle` as a real opencode command (so it can
-      // accept "update" as an argument) and bridges back to this entry
-      // by value via client.tui.executeCommand.
+      // Slash field is back: when the user types `/tetris-battle` with NO
+      // trailing space, the TUI's local slash autocomplete matches this
+      // entry and dispatches `onSelect` directly (no server round-trip).
+      // When there IS a trailing arg like `/tetris-battle update`, the
+      // autocomplete drops out, the prompt submits as a real opencode
+      // command, the server `command.execute.before` hook in index.ts
+      // parses the args and bridges back to either this entry or the
+      // update entry below via client.tui.executeCommand.
       title: "Tetris Battle",
       value: "opencode.tetris.battle",
       category: "Game",
+      slash: { name: "tetris-battle" },
       onSelect() {
         open();
       },
     },
     {
-      // No slash either — only triggered via the server plugin's
-      // "tetris-battle update" path or the splash [U] key.
+      // Update entry — only triggered via the server bridge or splash [U].
       title: "Tetris Battle · update",
       value: "opencode.tetris.battle.update",
       category: "Game",

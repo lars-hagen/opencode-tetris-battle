@@ -43,15 +43,6 @@ const server: Plugin = async (ctx: PluginInput) => {
         sub === "update"
           ? "opencode.tetris.battle.update"
           : "opencode.tetris.battle";
-      // Toast first so the user sees something even if the bridge fails to
-      // resolve a TUI command handler. This also acts as a runtime probe
-      // confirming the server-side hook fired.
-      await client.tui.showToast({
-        body: {
-          variant: "info",
-          message: `tetris-battle → ${target}`,
-        },
-      });
       await client.tui.executeCommand({ body: { command: target } });
       // Sentinel error suppresses prompt submission. The opencode prompt
       // runner catches and discards thrown errors from this hook so the
