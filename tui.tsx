@@ -130,13 +130,27 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
     await installUpdate(latest);
   };
 
+  // Direct bus subscription bypasses the `command.trigger` registry path,
+  // which has a race: the server's `command.execute.before` can fire before
+  // this plugin's `command.register` callback has populated `entries()`,
+  // and `command.trigger` then silently falls through. Toast bridge works
+  // because toasts skip the registry. Mirror that pattern: listen for the
+  // CommandExecute bus event ourselves and dispatch directly.
+  const unsubBus = api.event.on("tui.command.execute", (evt) => {
+    const target = evt.properties.command;
+    if (target === "opencode.tetris.battle") open();
+    else if (target === "opencode.tetris.battle.update") void runUpdate();
+  });
+  api.lifecycle.onDispose(unsubBus);
+
   const unregister = api.command.register(() => [
     {
-      // No `slash` field here — the server plugin (index.ts) registers
-      // `tetris-battle` as a real opencode command so trailing args
-      // like "update" parse, and bridges back to this entry by VALUE
-      // via client.tui.executeCommand. Adding `slash` would duplicate
-      // the autocomplete row.
+      // No `slash` field — server plugin (index.ts) registers
+      // `tetris-battle` as a real opencode command. The Ctrl+P
+      // command palette still surfaces these entries by title/value
+      // for keyboard-shortcut discoverability, but actual dispatch
+      // happens through the direct event subscription above, not
+      // command.trigger.
       title: "Tetris Battle",
       value: "opencode.tetris.battle",
       category: "Game",
@@ -145,10 +159,6 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
       },
     },
     {
-      // Update entry — only triggered via the server bridge from
-      // `/tetris-battle update` or by the splash [U] key inside the
-      // dialog. Value is dispatched by command.trigger when the
-      // CommandExecute bus event arrives.
       title: "Tetris Battle · update",
       value: "opencode.tetris.battle.update",
       category: "Game",
