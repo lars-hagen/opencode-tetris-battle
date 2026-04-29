@@ -104,19 +104,56 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
     api.ui.dialog.setSize("xlarge");
   };
 
+  const runUpdate = async () => {
+    api.ui.toast({
+      variant: "info",
+      title: "Tetris Battle",
+      message: `checking for updates · current v${currentVersion}`,
+    });
+    const latest = await fetchLatestVersion();
+    if (!latest) {
+      api.ui.toast({
+        variant: "warning",
+        title: "Tetris Battle",
+        message: "could not reach npm registry",
+      });
+      return;
+    }
+    if (!isOlder(currentVersion, latest)) {
+      api.ui.toast({
+        variant: "success",
+        title: "Tetris Battle",
+        message: `already on v${currentVersion} · latest is v${latest}`,
+      });
+      return;
+    }
+    await installUpdate(latest);
+  };
+
   const unregister = api.command.register(() => [
     {
-      // Single TUI slash entry. When the user types `/tetris-battle`, the
-      // TUI's local slash autocomplete matches and dispatches `onSelect`
-      // directly. Update detection happens silently on dialog mount; the
-      // splash surfaces a `[U] update` key when a newer version is on
-      // npm, so there's no need for a separate slash subcommand.
+      // No `slash` field here — the server plugin (index.ts) registers
+      // `tetris-battle` as a real opencode command so trailing args
+      // like "update" parse, and bridges back to this entry by VALUE
+      // via client.tui.executeCommand. Adding `slash` would duplicate
+      // the autocomplete row.
       title: "Tetris Battle",
       value: "opencode.tetris.battle",
       category: "Game",
-      slash: { name: "tetris-battle" },
       onSelect() {
         open();
+      },
+    },
+    {
+      // Update entry — only triggered via the server bridge from
+      // `/tetris-battle update` or by the splash [U] key inside the
+      // dialog. Value is dispatched by command.trigger when the
+      // CommandExecute bus event arrives.
+      title: "Tetris Battle · update",
+      value: "opencode.tetris.battle.update",
+      category: "Game",
+      onSelect() {
+        void runUpdate();
       },
     },
   ]);
