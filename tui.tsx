@@ -104,57 +104,19 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
     api.ui.dialog.setSize("xlarge");
   };
 
-  const runUpdate = async () => {
-    api.ui.toast({
-      variant: "info",
-      title: "Tetris Battle",
-      message: `checking for updates · current v${currentVersion}`,
-    });
-    const latest = await fetchLatestVersion();
-    if (!latest) {
-      api.ui.toast({
-        variant: "warning",
-        title: "Tetris Battle",
-        message: "could not reach npm registry",
-      });
-      return;
-    }
-    if (!isOlder(currentVersion, latest)) {
-      api.ui.toast({
-        variant: "success",
-        title: "Tetris Battle",
-        message: `already on v${currentVersion} · latest is v${latest}`,
-      });
-      return;
-    }
-    await installUpdate(latest);
-  };
-
   const unregister = api.command.register(() => [
     {
-      // Slash field is back: when the user types `/tetris-battle` with NO
-      // trailing space, the TUI's local slash autocomplete matches this
-      // entry and dispatches `onSelect` directly (no server round-trip).
-      // When there IS a trailing arg like `/tetris-battle update`, the
-      // autocomplete drops out, the prompt submits as a real opencode
-      // command, the server `command.execute.before` hook in index.ts
-      // parses the args and bridges back to either this entry or the
-      // update entry below via client.tui.executeCommand.
+      // Single TUI slash entry. When the user types `/tetris-battle`, the
+      // TUI's local slash autocomplete matches and dispatches `onSelect`
+      // directly. Update detection happens silently on dialog mount; the
+      // splash surfaces a `[U] update` key when a newer version is on
+      // npm, so there's no need for a separate slash subcommand.
       title: "Tetris Battle",
       value: "opencode.tetris.battle",
       category: "Game",
       slash: { name: "tetris-battle" },
       onSelect() {
         open();
-      },
-    },
-    {
-      // Update entry — only triggered via the server bridge or splash [U].
-      title: "Tetris Battle · update",
-      value: "opencode.tetris.battle.update",
-      category: "Game",
-      onSelect() {
-        void runUpdate();
       },
     },
   ]);
