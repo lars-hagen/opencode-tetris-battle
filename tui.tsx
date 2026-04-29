@@ -135,9 +135,24 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
   // this plugin's `command.register` callback has populated `entries()`,
   // and `command.trigger` then silently falls through. Toast bridge works
   // because toasts skip the registry. Mirror that pattern: listen for the
-  // CommandExecute bus event ourselves and dispatch directly.
+  // CommandExecute bus event ourselves and dispatch directly. Toasts here
+  // are also instrumentation — if you can see the magenta toast, the bus
+  // event reached us. If it does not appear, the workspace/directory
+  // filter in context/event.ts:16-30 is dropping the event.
+  api.ui.toast({
+    variant: "info",
+    title: "Tetris Battle",
+    message: `plugin v${currentVersion} loaded · bus listener armed`,
+    duration: 3000,
+  });
   const unsubBus = api.event.on("tui.command.execute", (evt) => {
     const target = evt.properties.command;
+    api.ui.toast({
+      variant: "info",
+      title: "Tetris Battle bridge",
+      message: `bus → ${target}`,
+      duration: 4000,
+    });
     if (target === "opencode.tetris.battle") open();
     else if (target === "opencode.tetris.battle.update") void runUpdate();
   });
