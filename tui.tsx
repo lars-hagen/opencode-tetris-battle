@@ -130,24 +130,21 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
     await installUpdate(latest);
   };
 
-  // Two slash commands rather than one with a subcommand. The
-  // server-side bridge approach (server registers `tetris-battle` as a
-  // real opencode command, parses `update` as an arg, calls
-  // `client.tui.executeCommand` to dispatch back to the TUI) was
-  // pursued through 1.0.17–1.0.25 and proved unreliable: the bus
-  // envelope arriving at the TUI plugin had `properties: {}` despite
-  // the server publishing with `{command: "..."}`. Built-in TUI
-  // command triggering works on the same bus path, but our plugin's
-  // listener consistently saw the field stripped. Rather than continue
-  // debugging cross-process serialisation, we mirror what battle-tested
-  // plugins (opencode-secrets) do: register two separate slash
-  // commands, no server bridge, no event subscription.
+  // Two TUI command entries with NO `slash` field. The server plugin
+  // (index.ts) registers `tetris-battle` as a real opencode command
+  // via the `config` hook, so `/tetris-battle` and
+  // `/tetris-battle update` both flow through the prompt's
+  // server-command path and hit the server's
+  // `command.execute.before` hook. That hook bridges back to the
+  // TUI by POSTing /tui/publish, which dispatches the bus event,
+  // which calls `command.trigger(value)` against the registry below.
+  // No `slash:` here so we don't double-up the autocomplete entry.
+  // Ctrl+P still surfaces both for keyboard discoverability.
   const unregister = api.command.register(() => [
     {
       title: "Tetris Battle",
       value: "opencode.tetris.battle",
       category: "Game",
-      slash: { name: "tetris-battle" },
       onSelect() {
         open();
       },
@@ -156,7 +153,6 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
       title: "Tetris Battle · update",
       value: "opencode.tetris.battle.update",
       category: "Game",
-      slash: { name: "tetris-battle-update" },
       onSelect() {
         void runUpdate();
       },
