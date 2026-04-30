@@ -1,69 +1,133 @@
 import type { Plugin } from "@opencode-ai/plugin";
 
-// Server-side plugin entry. Two responsibilities:
+// Server-side plugin. Two responsibilities:
 //
-// 1. Register `tetris-battle` as a real opencode command via the
-//    `config` hook so the prompt-submit handler in
-//    packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx:793
-//    routes `/tetris-battle update` (with a SPACE) through
-//    `client.session.command(...)` and our `command.execute.before`
-//    hook fires.
+//   1. `config` hook registers `tetris-battle` as a real opencode
+//      command. Without this, `/tetris-battle` is treated as raw
+//      prompt text and `command.execute.before` never fires.
 //
-// 2. Bridge to the TUI process by POSTing raw JSON to the server's
-//    own `/tui/publish` endpoint. We do NOT use
-//    `client.tui.executeCommand` — that path was tested through
-//    1.0.17–1.0.25 and consistently delivered an envelope with
-//    `properties: {}` to the TUI plugin's bus listener, the
-//    `command` field stripped somewhere between SDK encode and
-//    bus dispatch. `/tui/publish` accepts a Schema.Union of bare
-//    `TuiEvent.*.properties` shapes (no rename, no alias map) and
-//    is exactly the path `appendPrompt` uses, which works.
+//   2. `command.execute.before` hook intercepts `/tetris-battle`
+//      and `/tetris-battle update`, publishes a TUI command-execute
+//      event through the in-process SDK client, then throws the
+//      sentinel to suppress the empty prompt template from going
+//      to the LLM.
 //
-// Why raw `fetch` and not the SDK: by hand-crafting the JSON and
-// posting straight at the HttpApi route, we bypass whatever Effect
-// Schema encode step on the SDK side was eating the `command`
-// field. The server-side decode step is a plain `Schema.Struct`
-// match against `TuiEvent.CommandExecute.properties` ({command:
-// String}), so the field arrives intact. The publish handler then
-// calls `bus.publish(TuiEvent.CommandExecute, ctx.payload.properties)`
-// verbatim, and the TUI's `event.on(TuiEvent.CommandExecute.type,
-// evt => command.trigger(evt.properties.command))` listener at
-// app.tsx:751 dispatches to our registered TUI plugin command by
-// its `value` (`opencode.tetris.battle` or
-// `opencode.tetris.battle.update`).
+// The SDK's `client.tui.publish` routes through Server.Default()
+// .app.fetch in-process, so no real bound port is needed. The TUI
+// app subscribes to `tui.command.execute` and dispatches via its
+// command registry to the matching `onSelect` in tui.tsx.
+//
+// Note: the legacy `/tui/execute-command` Hono route at
+// packages/opencode/src/server/routes/instance/tui.ts:280-298 has
+// a bug where unknown command aliases drop the `command` field to
+// undefined, which JSON.stringify strips, leaving the TUI with
+// `{properties: {}}`. We avoid that route entirely by publishing
+// the bus event directly via /tui/publish.
 
 const id = "opencode-tetris-battle";
-
 const SENTINEL = "__TETRIS_BATTLE_HANDLED__";
 
-const publishCommand = async (serverUrl: URL, command: string) => {
-  const url = new URL("/tui/publish", serverUrl);
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      type: "tui.command.execute",
-      properties: { command },
-    }),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`tui.publish failed ${res.status}: ${text}`);
+declare const require: ((m: string) => unknown) | undefined;
+declare const process: { env?: Record<string, string | undefined> } | undefined;
+
+const requireDyn = (mod: string): unknown => {
+  try {
+    return typeof require === "function" ? require(mod) : null;
+  } catch {
+    return null;
   }
 };
 
-const server: Plugin = async ({ serverUrl }) => {
+interface FsLike {
+  mkdirSync: (p: string, opts: { recursive: boolean }) => void;
+  appendFileSync: (p: string, data: string, enc: string) => void;
+}
+interface OsLike {
+  homedir: () => string;
+}
+interface PathLike {
+  join: (...parts: string[]) => string;
+  dirname: (p: string) => string;
+}
+
+const fsMod = (requireDyn("node:fs") ?? requireDyn("fs")) as FsLike | null;
+const osMod = (requireDyn("node:os") ?? requireDyn("os")) as OsLike | null;
+const pathMod = (requireDyn("node:path") ??
+  requireDyn("path")) as PathLike | null;
+
+const HOME: string =
+  osMod?.homedir() ?? process?.env?.USERPROFILE ?? process?.env?.HOME ?? ".";
+
+const LOG_PATH: string = pathMod
+  ? pathMod.join(
+      HOME,
+      ".local",
+      "share",
+      "opencode",
+      "log",
+      "tetris-bridge.log",
+    )
+  : `${HOME}/.local/share/opencode/log/tetris-bridge.log`;
+
+const log = (line: string) => {
+  if (!fsMod || !pathMod) return;
+  try {
+    fsMod.mkdirSync(pathMod.dirname(LOG_PATH), { recursive: true });
+    fsMod.appendFileSync(
+      LOG_PATH,
+      `${new Date().toISOString()} ${line}\n`,
+      "utf8",
+    );
+  } catch {
+    // ignore — diagnostic only.
+  }
+};
+
+const server: Plugin = async (ctx) => {
+  log(`server plugin init id=${id} directory=${ctx.directory}`);
+
+  // Publish a `tui.command.execute` bus event through the SDK
+  // client. ctx.client uses a custom fetch that routes via
+  // Server.Default().app.fetch so this is fully in-process.
+  // Must be called as a method on `client.tui` so the SDK's
+  // internal `this._client` binding resolves; extracting the
+  // function to a local reference loses `this`.
+  const publishToTui = async (target: string): Promise<boolean> => {
+    const client = ctx.client as unknown as {
+      tui?: {
+        publish?: (args: {
+          body: { type: string; properties: Record<string, unknown> };
+        }) => Promise<{ response?: { ok?: boolean; status?: number } }>;
+      };
+    };
+    if (typeof client?.tui?.publish !== "function") {
+      log(`publishToTui client.tui.publish unavailable`);
+      return false;
+    }
+    try {
+      const result = await client.tui.publish({
+        body: {
+          type: "tui.command.execute",
+          properties: { command: target },
+        },
+      });
+      const ok = result?.response?.ok ?? true;
+      log(`publishToTui target=${target} ok=${ok}`);
+      return ok;
+    } catch (err) {
+      log(`publishToTui error=${(err as Error).message}`);
+      return false;
+    }
+  };
+
   return {
     async config(cfg) {
       cfg.command ??= {};
       cfg.command["tetris-battle"] = {
-        // Empty template — we never want the LLM to actually run.
-        // The `command.execute.before` hook below dispatches to the
-        // TUI and then throws the sentinel to abort the prompt
-        // fiber before the empty template reaches the model.
         template: "",
         description: "Tetris Battle (use `/tetris-battle update` to update)",
       };
+      log(`config hook registered tetris-battle command`);
     },
     async "command.execute.before"(input) {
       if (input.command !== "tetris-battle") return;
@@ -72,10 +136,11 @@ const server: Plugin = async ({ serverUrl }) => {
         arg === "update"
           ? "opencode.tetris.battle.update"
           : "opencode.tetris.battle";
-      await publishCommand(serverUrl, target);
-      // Abort the prompt fiber so the empty template never reaches
-      // the LLM. The TUI side has already received the bus event
-      // and triggered the registered command's onSelect.
+      log(`command.execute.before arg=${arg} target=${target}`);
+      await publishToTui(target);
+      // Sentinel suppresses the prompt fiber so the empty template
+      // never reaches the LLM. The TUI side has already received
+      // the bus event and triggered the right action.
       throw new Error(SENTINEL);
     },
   };

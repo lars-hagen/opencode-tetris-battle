@@ -130,16 +130,12 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
     await installUpdate(latest);
   };
 
-  // Two TUI command entries with NO `slash` field. The server plugin
-  // (index.ts) registers `tetris-battle` as a real opencode command
-  // via the `config` hook, so `/tetris-battle` and
-  // `/tetris-battle update` both flow through the prompt's
-  // server-command path and hit the server's
-  // `command.execute.before` hook. That hook bridges back to the
-  // TUI by POSTing /tui/publish, which dispatches the bus event,
-  // which calls `command.trigger(value)` against the registry below.
-  // No `slash:` here so we don't double-up the autocomplete entry.
-  // Ctrl+P still surfaces both for keyboard discoverability.
+  // Localhost dispatch from the server plugin's
+  // `command.execute.before` hook (index.ts) reaches this TUI via
+  // the SDK's `client.tui.publish({type:"tui.command.execute",
+  // properties:{command}})` path. The TUI's app-level subscriber
+  // routes that event into the command registry below, which calls
+  // the matching `onSelect`. We do not need our own server.
   const unregister = api.command.register(() => [
     {
       title: "Tetris Battle",

@@ -1,7 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPluginApi, TuiThemeCurrent } from "@opencode-ai/plugin/tui";
-import { RGBA, type ParsedKey } from "@opentui/core";
-import { useKeyboard } from "@opentui/solid";
+import {
+  RGBA,
+  type BoxRenderable,
+  type ParsedKey,
+  type ScrollBoxRenderable,
+} from "@opentui/core";
+import { useKeyboard, useTerminalDimensions } from "@opentui/solid";
 import { ConvexClient } from "convex/browser";
 import { makeFunctionReference } from "convex/server";
 import {
@@ -1098,6 +1103,7 @@ const Panel = (props: {
   titleColor?: RGBA;
   width?: number | "auto" | `${number}%`;
   flexGrow?: number;
+  flexBasis?: number | "auto";
   children: JSX.Element;
 }) => {
   // The opentui Box `title` prop renders the title baked into the top border
@@ -1114,6 +1120,7 @@ const Panel = (props: {
       borderColor={C.panelLine}
       width={props.width}
       flexGrow={props.flexGrow}
+      flexBasis={props.flexBasis}
       paddingLeft={1}
       paddingRight={1}
       paddingTop={0}
@@ -1378,6 +1385,58 @@ export const TetrisBattle = (props: {
     ),
   );
   const [paused, setPaused] = createSignal(false);
+  // ─── Vertical centering ──────────────────────────────────────────────────
+  // The opencode dialog wrapper hard-pads `viewportHeight / 4` from the top,
+  // which only visually centers SHORT dialogs. Our dialog is tall and
+  // route-dependent, so the wrapper-imposed top anchor leaves a fat gap at
+  // the bottom on small content (splash) and clips the bottom on large
+  // content. We compensate by measuring our own content height after layout
+  // and applying a corrective `marginTop` on the outer wrapper:
+  //
+  //   marginTop = (viewportHeight / 4) - (contentHeight / 2)
+  //
+  // Positive when content is shorter than half the viewport (push down
+  // toward true center); negative when content is taller (pull up). Yoga
+  // accepts negative margins. We clamp the lower bound at `-(viewportHeight
+  // / 4)` so we can never push the dialog above the viewport top.
+  const dimensions = useTerminalDimensions();
+  const [contentHeight, setContentHeight] = createSignal(0);
+  let centerBox: BoxRenderable | undefined;
+  const measureCenter = () => {
+    if (!centerBox) return;
+    // `height` is the public layout-resolved height getter on Renderable.
+    // It reads the same yoga value as `getComputedHeight()` but stays inside
+    // the published TS surface (no protected-property bypass needed).
+    const h = centerBox.height ?? 0;
+    if (h > 0 && h !== untrack(contentHeight)) setContentHeight(h);
+  };
+  const verticalOffset = createMemo(() => {
+    const vh = dimensions().height;
+    const ch = contentHeight();
+    if (ch <= 0) return 0;
+    const offset = Math.floor(vh / 4 - ch / 2);
+    return Math.max(offset, -Math.floor(vh / 4));
+  });
+  // Re-measure on every reactive layout-relevant change. The actual
+  // measurement still has to wait for yoga to compute the new layout, so we
+  // defer one tick. Resize listener (in onMount) covers terminal resizes.
+  createEffect(() => {
+    // Read the deps that meaningfully change content height across screens.
+    dimensions();
+    route();
+    started();
+    paused();
+    confirmAction();
+    error();
+    splashSeen();
+    updateAvailable();
+    setTimeout(measureCenter, 0);
+  });
+
+  // ScrollBox ref for the match-over screen — used to drive arrow-key scroll
+  // from the global useKeyboard handler so the global key router stays
+  // authoritative (no focus juggling needed).
+  let overScrollRef: ScrollBoxRenderable | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let countdownStartTimer: ReturnType<typeof setTimeout> | undefined;
   let publishTimer: ReturnType<typeof setInterval> | undefined;
@@ -1917,6 +1976,9 @@ export const TetrisBattle = (props: {
     void props.checkUpdate().then((latest) => {
       if (latest) setUpdateAvailable(latest);
     });
+    // Initial measurement; subsequent measurements are driven by the
+    // createEffect above which fires on every layout-relevant signal.
+    setTimeout(measureCenter, 0);
   });
   onCleanup(() => {
     persist(state());
@@ -2063,6 +2125,42 @@ export const TetrisBattle = (props: {
       if (isKey(evt, "r", "R")) {
         prevent(evt);
         restart();
+        return;
+      }
+      // Arrow / page / home-end scroll the match-over scrollbox. We drive
+      // the native opentui ScrollBox via ref so the global router owns the
+      // gesture and no focus dance is needed.
+      if (overScrollRef) {
+        if (isKey(evt, "up")) {
+          prevent(evt);
+          overScrollRef.scrollBy({ x: 0, y: -1 });
+          return;
+        }
+        if (isKey(evt, "down")) {
+          prevent(evt);
+          overScrollRef.scrollBy({ x: 0, y: 1 });
+          return;
+        }
+        if (isKey(evt, "pageup")) {
+          prevent(evt);
+          overScrollRef.scrollBy({ x: 0, y: -8 });
+          return;
+        }
+        if (isKey(evt, "pagedown", "space", " ")) {
+          prevent(evt);
+          overScrollRef.scrollBy({ x: 0, y: 8 });
+          return;
+        }
+        if (isKey(evt, "home")) {
+          prevent(evt);
+          overScrollRef.scrollTo({ x: 0, y: 0 });
+          return;
+        }
+        if (isKey(evt, "end")) {
+          prevent(evt);
+          overScrollRef.scrollTo({ x: 0, y: overScrollRef.scrollHeight });
+          return;
+        }
       }
       return;
     }
@@ -2541,9 +2639,9 @@ export const TetrisBattle = (props: {
         </box>
       </box>
       <box paddingTop={2}>
-        <box flexDirection="row" gap={2}>
-          {/* You slot */}
-          <Panel title="YOU" titleColor={C.cool} flexGrow={1}>
+        <box flexDirection="row" gap={2} width="100%">
+          {/* You slot — flexBasis 0 + flexGrow 1 so YOU/OPPONENT split the row evenly and the boxes don't reflow when the ready label changes width. */}
+          <Panel title="YOU" titleColor={C.cool} flexGrow={1} flexBasis={0}>
             <text>
               <S fg={me()?.ready ? C.ok : C.faint}>
                 <b>{me()?.ready ? "● READY" : "○ NOT READY"}</b>
@@ -2554,7 +2652,12 @@ export const TetrisBattle = (props: {
             </text>
           </Panel>
           {/* Opponent slot */}
-          <Panel title="OPPONENT" titleColor={C.loss} flexGrow={1}>
+          <Panel
+            title="OPPONENT"
+            titleColor={C.loss}
+            flexGrow={1}
+            flexBasis={0}
+          >
             <Show
               when={opponent()}
               fallback={
@@ -2868,6 +2971,58 @@ export const TetrisBattle = (props: {
   );
 
   // ─── Match-over (Victory / Defeat) ───────────────────────────────────────
+  // Compact stat cell — one row of label + value, no inner border. Stack six
+  // of these in a single row to replace the original 2×3 bordered grid.
+  const StatCell = (sp: {
+    label: string;
+    value: string | number;
+    color: RGBA;
+  }) => (
+    <box flexDirection="column" flexGrow={1} flexBasis={0} paddingRight={1}>
+      <text>
+        <S fg={C.muted}>
+          <b>{sp.label}</b>
+        </S>
+      </text>
+      <text>
+        <S fg={sp.color}>
+          <b>{sp.value}</b>
+        </S>
+      </text>
+    </box>
+  );
+
+  // Mini-board — decorative final-state preview at half the row count of the
+  // playable boards. Samples every other row, single-char glyph per cell.
+  // Mini-board — full-resolution preview using two-cell-wide glyphs so the
+  // 10×20 grid keeps proper aspect ratio (matches the live board's `██` cells).
+  const MiniBoard = (mp: {
+    cells: BoardCell[][];
+    color: (cell: BoardCell) => RGBA;
+    glyph: (cell: BoardCell) => string;
+  }) => (
+    <box
+      flexDirection="column"
+      border
+      borderStyle="single"
+      borderColor={C.panelLine}
+      paddingTop={0}
+      paddingBottom={0}
+      paddingLeft={0}
+      paddingRight={0}
+    >
+      <For each={mp.cells}>
+        {(row) => (
+          <box flexDirection="row">
+            <For each={row}>
+              {(cell) => <text fg={mp.color(cell)}>{mp.glyph(cell)}</text>}
+            </For>
+          </box>
+        )}
+      </For>
+    </box>
+  );
+
   const OverScreen = () => {
     const isWin = createMemo(() => state().won || winner() === playerId);
     const heroLines = () => (isWin() ? FIGLET.VICTORY : FIGLET.DEFEAT);
@@ -2875,8 +3030,12 @@ export const TetrisBattle = (props: {
       isWin()
         ? [C.gold, C.warn, C.accent, C.info, C.cool, C.win]
         : [C.loss, C.bad, C.warn, C.muted];
+    const yourCells = () => state().board as BoardCell[][];
+    const yourCellGlyph = (cell: BoardCell) => (cell === null ? "· " : "██");
+    const yourCellColor = (cell: BoardCell) => cellColor(cell);
     return (
-      <box flexDirection="column" paddingTop={1} paddingBottom={1}>
+      <box flexDirection="column" flexGrow={1} width="100%" paddingTop={0} paddingBottom={0}>
+        {/* Fixed header — ribbon stays pinned above the scroll region. */}
         <StatusRibbon
           state="MATCH_OVER"
           stateColor={isWin() ? C.win : C.loss}
@@ -2893,117 +3052,116 @@ export const TetrisBattle = (props: {
               </S>
             </text>
           }
-          right={<StateDot color={C.ok} label="submitted" />}
+          right={
+            <StateDot
+              color={isWin() ? C.win : C.loss}
+              label={isWin() ? "victory" : "defeated"}
+            />
+          }
         />
-        <box paddingTop={1} paddingBottom={1} alignItems="center">
-          <HeroBanner lines={heroLines()} stops={heroStops()} />
-        </box>
-        <box alignItems="center">
-          <text>
-            <S fg={C.muted}>
-              <i>
-                {isWin()
-                  ? "you outpaced your opponent — run it back"
-                  : "you topped out — review the stack and run it back"}
-              </i>
-            </S>
-          </text>
-        </box>
-        <box paddingTop={1} flexDirection="row" gap={2}>
-          <Panel title="LINES_SENT" titleColor={C.win} flexGrow={1}>
-            <text>
-              <S fg={C.win}>
-                <b>{state().stats.sent}</b>
-              </S>
-            </text>
-          </Panel>
-          <Panel title="LINES_CLEARED" titleColor={C.cool} flexGrow={1}>
-            <text>
-              <S fg={C.cool}>
-                <b>{state().lines}</b>
-              </S>
-            </text>
-          </Panel>
-          <Panel title="COMBO_MAX" titleColor={C.accent} flexGrow={1}>
-            <text>
-              <S fg={C.accent}>
-                <b>× {state().stats.maxCombo}</b>
-              </S>
-            </text>
-          </Panel>
-        </box>
-        <box paddingTop={1} flexDirection="row" gap={2}>
-          <Panel title="SCORE" titleColor={C.gold} flexGrow={1}>
-            <text>
-              <S fg={C.gold}>
-                <b>{state().score}</b>
-              </S>
-            </text>
-          </Panel>
-          <Panel title="PIECES" titleColor={PIECE.I} flexGrow={1}>
-            <text>
-              <S fg={PIECE.I}>
-                <b>{state().stats.pieces}</b>
-              </S>
-            </text>
-          </Panel>
-          <Panel title="LEVEL" titleColor={PIECE.L} flexGrow={1}>
-            <text>
-              <S fg={PIECE.L}>
-                <b>{state().level}</b>
-              </S>
-            </text>
-          </Panel>
-        </box>
-        <box paddingTop={1}>
-          <Panel title="FINAL_STATE" titleColor={C.panelLine}>
-            <box flexDirection="row" gap={4}>
-              <box flexDirection="column">
-                <text>
-                  <S fg={isWin() ? C.win : C.loss}>
-                    <b>{isWin() ? "WINNER" : "DEFEATED"}</b>
-                  </S>
-                  <S fg={C.muted}>
-                    {" "}
-                    {playerHandle(playerId, LOCAL_PLAYER_NAME)}
-                  </S>
-                </text>
-                <YourBoard />
-              </box>
-              <box flexDirection="column">
-                <text>
-                  <S fg={isWin() ? C.loss : C.win}>
-                    <b>{isWin() ? "DEFEATED" : "WINNER"}</b>
-                  </S>
-                  <S fg={C.muted}> {playerHandle(opponent()?.playerId)}</S>
-                </text>
-                <OpponentBoard />
-              </box>
-            </box>
-          </Panel>
-        </box>
-        <box paddingTop={1} alignItems="center">
-          <box flexDirection="row" gap={2}>
-            <FramedButton keyLabel="R" label="REMATCH" color={C.win} />
-            <FramedButton keyLabel="L" label="LOBBY" color={C.info} />
-            <FramedButton keyLabel="Q" label="QUIT" color={C.loss} />
+        {/* Scrollable middle — figlet, tagline, stats, final-state. Native
+            opentui ScrollBox owns its scrollTop; arrow-key handlers below
+            mutate it via ref so the global `useKeyboard` stays authoritative. */}
+        <scrollbox
+          ref={overScrollRef}
+          flexGrow={1}
+          flexShrink={1}
+          scrollY
+          stickyStart="top"
+          rootOptions={{ flexGrow: 1, flexShrink: 1 }}
+          contentOptions={{ flexDirection: "column" }}
+        >
+          <box paddingBottom={1} alignItems="center">
+            <HeroBanner lines={heroLines()} stops={heroStops()} />
           </box>
-        </box>
-        <Show when={confirmMessage()}>
+          <box alignItems="center">
+            <text>
+              <S fg={C.muted}>
+                <i>
+                  {isWin()
+                    ? "you outpaced your opponent — run it back"
+                    : "you topped out — review the stack and run it back"}
+                </i>
+              </S>
+            </text>
+          </box>
+          <box paddingTop={1} flexDirection="row">
+            <StatCell
+              label="LINES_SENT"
+              value={state().stats.sent}
+              color={C.win}
+            />
+            <StatCell
+              label="LINES_CLEARED"
+              value={state().lines}
+              color={C.cool}
+            />
+            <StatCell
+              label="COMBO_MAX"
+              value={`× ${state().stats.maxCombo}`}
+              color={C.accent}
+            />
+            <StatCell label="SCORE" value={state().score} color={C.gold} />
+            <StatCell
+              label="PIECES"
+              value={state().stats.pieces}
+              color={PIECE.I}
+            />
+            <StatCell label="LEVEL" value={state().level} color={PIECE.L} />
+          </box>
           <box paddingTop={1}>
-            <text>
-              <S fg={C.warn}>
-                <b>{confirmMessage()}</b>
-              </S>
-            </text>
+            <Panel title="FINAL_STATE" titleColor={C.panelLine}>
+              <box flexDirection="row" gap={4}>
+                <box flexDirection="column">
+                  <text>
+                    <S fg={isWin() ? C.win : C.loss}>
+                      <b>{isWin() ? "WINNER" : "DEFEATED"}</b>
+                    </S>
+                    <S fg={C.muted}>
+                      {" "}
+                      {playerHandle(playerId, LOCAL_PLAYER_NAME)}
+                    </S>
+                  </text>
+                  <MiniBoard
+                    cells={yourCells()}
+                    color={yourCellColor}
+                    glyph={yourCellGlyph}
+                  />
+                </box>
+                <box flexDirection="column">
+                  <text>
+                    <S fg={isWin() ? C.loss : C.win}>
+                      <b>{isWin() ? "DEFEATED" : "WINNER"}</b>
+                    </S>
+                    <S fg={C.muted}> {playerHandle(opponent()?.playerId)}</S>
+                  </text>
+                  <MiniBoard
+                    cells={state().opponentBoard}
+                    color={(cell) => rivalColor(cell, theme())}
+                    glyph={rivalGlyph}
+                  />
+                </box>
+              </box>
+            </Panel>
           </box>
-        </Show>
+          <Show when={confirmMessage()}>
+            <box paddingTop={1}>
+              <text>
+                <S fg={C.warn}>
+                  <b>{confirmMessage()}</b>
+                </S>
+              </text>
+            </box>
+          </Show>
+        </scrollbox>
+        {/* Fixed footer — hint bar always pinned, never clipped. */}
         <box paddingTop={1} alignItems="center">
           <HintBar
             items={[
               { key: "R", verb: "rematch" },
               { key: "L", verb: "lobby" },
               { key: "Q", verb: "quit" },
+              { key: "↑↓", verb: "scroll" },
             ]}
           />
         </box>
@@ -3012,30 +3170,46 @@ export const TetrisBattle = (props: {
   };
 
   return (
-    <WindowChrome
-      route={`/tetris-battle  ›  ${route()}${roomCode() ? `  ·  room ${roomCode()}` : ""}`}
-      version="v1.0.27"
-      latencyMs={latencyBadge().text}
-      latencyColor={latencyBadge().color}
+    <box
+      flexDirection="column"
+      marginTop={route() === "over" ? 0 : verticalOffset()}
+      width="100%"
+      flexGrow={route() === "over" ? 1 : undefined}
     >
-      <Show when={route() === "splash"}>
-        <SplashScreen />
-      </Show>
-      <Show when={route() === "lobby"}>
-        <LobbyScreen />
-      </Show>
-      <Show when={route() === "room"}>
-        <RoomScreen />
-      </Show>
-      <Show when={route() === "match"}>
-        <MatchScreen />
-      </Show>
-      <Show when={route() === "paused"}>
-        <PauseOverlay />
-      </Show>
-      <Show when={route() === "over"}>
-        <OverScreen />
-      </Show>
-    </WindowChrome>
+      <box
+        ref={(item: BoxRenderable) => {
+          centerBox = item;
+        }}
+        flexDirection="column"
+        width="100%"
+        flexGrow={route() === "over" ? 1 : undefined}
+      >
+        <WindowChrome
+          route={`/tetris-battle  ›  ${route()}${roomCode() ? `  ·  room ${roomCode()}` : ""}`}
+          version="v1.0.36"
+          latencyMs={latencyBadge().text}
+          latencyColor={latencyBadge().color}
+        >
+          <Show when={route() === "splash"}>
+            <SplashScreen />
+          </Show>
+          <Show when={route() === "lobby"}>
+            <LobbyScreen />
+          </Show>
+          <Show when={route() === "room"}>
+            <RoomScreen />
+          </Show>
+          <Show when={route() === "match"}>
+            <MatchScreen />
+          </Show>
+          <Show when={route() === "paused"}>
+            <PauseOverlay />
+          </Show>
+          <Show when={route() === "over"}>
+            <OverScreen />
+          </Show>
+        </WindowChrome>
+      </box>
+    </box>
   );
 };
