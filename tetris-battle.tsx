@@ -2994,7 +2994,7 @@ export const TetrisBattle = (props: {
     const yourCellGlyph = (cell: BoardCell) => (cell === null ? "· " : "██");
     const yourCellColor = (cell: BoardCell) => cellColor(cell);
     return (
-      <box flexDirection="column" width="100%">
+      <box flexDirection="column" width="100%" flexGrow={1}>
         <StatusRibbon
           state="MATCH_OVER"
           stateColor={isWin() ? C.win : C.loss}
@@ -3105,6 +3105,11 @@ export const TetrisBattle = (props: {
             </box>
           </Show>
         </box>
+        {/* Flex spacer — eats remaining height so the footer pins to the
+            bottom of WindowChrome (which itself has flexGrow={1}). Without
+            this the chrome stretches but content stays top-anchored, leaving
+            a large empty void below the FINAL_STATE panel. */}
+        <box flexGrow={1} />
         {/* Fixed footer — hint bar always pinned, never clipped. */}
         <box paddingTop={1} alignItems="center">
           <HintBar
