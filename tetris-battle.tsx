@@ -3186,7 +3186,7 @@ export const TetrisBattle = (props: {
       >
         <WindowChrome
           route={`/tetris-battle  ›  ${route()}${roomCode() ? `  ·  room ${roomCode()}` : ""}`}
-          version="v1.0.36"
+          version={`v${props.currentVersion}`}
           latencyMs={latencyBadge().text}
           latencyColor={latencyBadge().color}
         >
