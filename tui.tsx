@@ -6,6 +6,7 @@ import type {
 } from "@opencode-ai/plugin/tui";
 import pkg from "./package.json" with { type: "json" };
 import { TetrisBattle } from "./tetris-battle.tsx";
+import { isOlder } from "./version.ts";
 
 const id = "opencode-tetris-battle";
 const convexUrlKey = "opencode.tetris-battle.convex-url";
@@ -41,17 +42,8 @@ const fetchLatestVersion = async (): Promise<string | null> => {
 };
 
 // Compare two semver strings naively. Returns true if `a` < `b`.
-const isOlder = (a: string, b: string): boolean => {
-  const parse = (s: string) => s.split(".").map((n) => parseInt(n, 10) || 0);
-  const aa = parse(a);
-  const bb = parse(b);
-  for (let i = 0; i < Math.max(aa.length, bb.length); i++) {
-    const x = aa[i] ?? 0;
-    const y = bb[i] ?? 0;
-    if (x !== y) return x < y;
-  }
-  return false;
-};
+// Implementation lives in `./version.ts` so it can be unit-tested
+// without dragging in the JSX TUI surface.
 
 const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
   if (!enabled(options)) return;
