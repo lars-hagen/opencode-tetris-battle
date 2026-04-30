@@ -27,6 +27,7 @@
     "test": "bun test",
     "convex:dev": "convex dev",
     "convex:deploy": "convex deploy",
+    "install:test": "bun run scripts/install-test.ts",
     "prepack": "bun run typecheck && bun test",
     "release:patch": "bun run typecheck && bun test && npm version patch -m \"chore: release %s\" && git push && git push origin $(git describe --tags --abbrev=0)",
     "release:minor": "bun run typecheck && bun test && npm version minor -m \"chore: release %s\" && git push && git push origin $(git describe --tags --abbrev=0)",
