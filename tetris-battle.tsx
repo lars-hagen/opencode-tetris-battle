@@ -4,7 +4,6 @@ import {
   RGBA,
   type BoxRenderable,
   type ParsedKey,
-  type ScrollBoxRenderable,
 } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid";
 import { ConvexClient } from "convex/browser";
@@ -1433,10 +1432,6 @@ export const TetrisBattle = (props: {
     setTimeout(measureCenter, 0);
   });
 
-  // ScrollBox ref for the match-over screen — used to drive arrow-key scroll
-  // from the global useKeyboard handler so the global key router stays
-  // authoritative (no focus juggling needed).
-  let overScrollRef: ScrollBoxRenderable | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let countdownStartTimer: ReturnType<typeof setTimeout> | undefined;
   let publishTimer: ReturnType<typeof setInterval> | undefined;
@@ -2126,41 +2121,6 @@ export const TetrisBattle = (props: {
         prevent(evt);
         restart();
         return;
-      }
-      // Arrow / page / home-end scroll the match-over scrollbox. We drive
-      // the native opentui ScrollBox via ref so the global router owns the
-      // gesture and no focus dance is needed.
-      if (overScrollRef) {
-        if (isKey(evt, "up")) {
-          prevent(evt);
-          overScrollRef.scrollBy({ x: 0, y: -1 });
-          return;
-        }
-        if (isKey(evt, "down")) {
-          prevent(evt);
-          overScrollRef.scrollBy({ x: 0, y: 1 });
-          return;
-        }
-        if (isKey(evt, "pageup")) {
-          prevent(evt);
-          overScrollRef.scrollBy({ x: 0, y: -8 });
-          return;
-        }
-        if (isKey(evt, "pagedown", "space", " ")) {
-          prevent(evt);
-          overScrollRef.scrollBy({ x: 0, y: 8 });
-          return;
-        }
-        if (isKey(evt, "home")) {
-          prevent(evt);
-          overScrollRef.scrollTo({ x: 0, y: 0 });
-          return;
-        }
-        if (isKey(evt, "end")) {
-          prevent(evt);
-          overScrollRef.scrollTo({ x: 0, y: overScrollRef.scrollHeight });
-          return;
-        }
       }
       return;
     }
@@ -3034,8 +2994,7 @@ export const TetrisBattle = (props: {
     const yourCellGlyph = (cell: BoardCell) => (cell === null ? "· " : "██");
     const yourCellColor = (cell: BoardCell) => cellColor(cell);
     return (
-      <box flexDirection="column" flexGrow={1} width="100%" paddingTop={0} paddingBottom={0}>
-        {/* Fixed header — ribbon stays pinned above the scroll region. */}
+      <box flexDirection="column" width="100%">
         <StatusRibbon
           state="MATCH_OVER"
           stateColor={isWin() ? C.win : C.loss}
@@ -3059,18 +3018,10 @@ export const TetrisBattle = (props: {
             />
           }
         />
-        {/* Scrollable middle — figlet, tagline, stats, final-state. Native
-            opentui ScrollBox owns its scrollTop; arrow-key handlers below
-            mutate it via ref so the global `useKeyboard` stays authoritative. */}
-        <scrollbox
-          ref={overScrollRef}
-          flexGrow={1}
-          flexShrink={1}
-          scrollY
-          stickyStart="top"
-          rootOptions={{ flexGrow: 1, flexShrink: 1 }}
-          contentOptions={{ flexDirection: "column" }}
-        >
+        {/* Content sizes naturally; the outer dialog uses the global
+            verticalOffset centering scheme so this stays nicely centered on
+            tall terminals instead of stretching to fill the viewport. */}
+        <box flexDirection="column">
           <box paddingBottom={1} alignItems="center">
             <HeroBanner lines={heroLines()} stops={heroStops()} />
           </box>
@@ -3153,7 +3104,7 @@ export const TetrisBattle = (props: {
               </text>
             </box>
           </Show>
-        </scrollbox>
+        </box>
         {/* Fixed footer — hint bar always pinned, never clipped. */}
         <box paddingTop={1} alignItems="center">
           <HintBar
@@ -3161,7 +3112,6 @@ export const TetrisBattle = (props: {
               { key: "R", verb: "rematch" },
               { key: "L", verb: "lobby" },
               { key: "Q", verb: "quit" },
-              { key: "↑↓", verb: "scroll" },
             ]}
           />
         </box>
@@ -3172,9 +3122,8 @@ export const TetrisBattle = (props: {
   return (
     <box
       flexDirection="column"
-      marginTop={route() === "over" ? 0 : verticalOffset()}
+      marginTop={verticalOffset()}
       width="100%"
-      flexGrow={route() === "over" ? 1 : undefined}
     >
       <box
         ref={(item: BoxRenderable) => {
@@ -3182,7 +3131,6 @@ export const TetrisBattle = (props: {
         }}
         flexDirection="column"
         width="100%"
-        flexGrow={route() === "over" ? 1 : undefined}
       >
         <WindowChrome
           route={`/tetris-battle  ›  ${route()}${roomCode() ? `  ·  room ${roomCode()}` : ""}`}
