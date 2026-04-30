@@ -16,6 +16,12 @@ Restart OpenCode, then run:
 /tetris-battle
 ```
 
+To check for updates from inside OpenCode:
+
+```text
+/tetris-battle-update
+```
+
 ## Play
 
 ### Matchmaking

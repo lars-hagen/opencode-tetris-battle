@@ -130,17 +130,16 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
     await installUpdate(latest);
   };
 
-  // Localhost dispatch from the server plugin's
-  // `command.execute.before` hook (index.ts) reaches this TUI via
-  // the SDK's `client.tui.publish({type:"tui.command.execute",
-  // properties:{command}})` path. The TUI's app-level subscriber
-  // routes that event into the command registry below, which calls
-  // the matching `onSelect`. We do not need our own server.
+  // Slash commands register straight from the TUI plugin via the
+  // `slash` field on `TuiCommand`. Opencode parses `/tetris-battle`
+  // and `/tetris-battle-update` and invokes the matching `onSelect`.
+  // No server-side bridge needed.
   const unregister = api.command.register(() => [
     {
       title: "Tetris Battle",
       value: "opencode.tetris.battle",
       category: "Game",
+      slash: { name: "tetris-battle" },
       onSelect() {
         open();
       },
@@ -149,6 +148,7 @@ const tui: TuiPlugin = async (api: TuiPluginApi, options: unknown) => {
       title: "Tetris Battle · update",
       value: "opencode.tetris.battle.update",
       category: "Game",
+      slash: { name: "tetris-battle-update" },
       onSelect() {
         void runUpdate();
       },
