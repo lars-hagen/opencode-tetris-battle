@@ -3243,6 +3243,14 @@ export const TetrisBattle = (props: {
       flexDirection="column"
       marginTop={verticalOffset()}
       width="100%"
+      // Hide the wrapper until our first measurement lands. Without this the
+      // dialog paints once at the wrapper-default top anchor (offset = 0),
+      // then jumps the moment `measureCenter` populates `contentHeight`,
+      // producing a visible vertical jitter. We use opacity 0 (not
+      // `visible: false`) so yoga still lays out the box and our ref's
+      // height getter can read a real value; otherwise the measurement
+      // never fires and the dialog stays hidden forever.
+      opacity={contentHeight() > 0 ? 1 : 0}
     >
       <box
         ref={(item: BoxRenderable) => {
