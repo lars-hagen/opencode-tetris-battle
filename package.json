@@ -26,7 +26,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test",
     "convex:dev": "convex dev",
-    "convex:deploy": "convex dev --once",
+    "convex:push": "convex dev --once",
     "install:test": "bun run scripts/install-test.ts",
     "upgrade": "node bin/cli.mjs upgrade",
     "prepack": "bun run typecheck && bun test",
