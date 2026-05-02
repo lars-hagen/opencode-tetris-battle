@@ -18,31 +18,11 @@ Restart OpenCode, then run:
 
 ## Upgrade
 
-The OpenCode plugin cache keys installs by literal spec, so re-running
-`opencode plugin ...@latest` after a release is a no-op until the cache is
-busted. Use either of the following to pull a new version cleanly:
-
-From any shell (no clone needed):
-
 ```sh
 bunx opencode-tetris-battle upgrade
 ```
 
-(equivalent: `npx opencode-tetris-battle upgrade`, `pnpm dlx opencode-tetris-battle upgrade`)
-
-From inside OpenCode:
-
-```text
-/tetris-battle-update
-```
-
-From a clone of this repo:
-
-```sh
-bun run upgrade
-```
-
-Restart your OpenCode TUI session afterwards so the new plugin code loads.
+Restart your OpenCode TUI session afterwards.
 
 ## Play
 
