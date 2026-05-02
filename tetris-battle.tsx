@@ -41,6 +41,7 @@ const boardHeight = 20;
 const tickMs = 500;
 const heartbeatMs = 2_000;
 const opponentStaleMs = 8_000;
+const opponentForfeitMs = 12_000;
 const lineScores = [0, 100, 300, 500, 800] as const;
 
 type RoomStatus = "waiting" | "countdown" | "active" | "done";
@@ -125,6 +126,11 @@ const refs = {
     { code: string; playerId: string },
     null
   >("tetris:heartbeat"),
+  forfeitIfStale: makeFunctionReference<
+    "mutation",
+    { code: string; requestingPlayerId: string },
+    { ok: boolean; forfeit?: boolean }
+  >("tetris:forfeitIfStale"),
   submitBoard: makeFunctionReference<
     "mutation",
     {
@@ -1222,7 +1228,7 @@ const StateDot = (props: { color: RGBA; label: string }) => (
 );
 
 // 4-cell digit slot — used in lobby JOIN card and room code preview.
-const DigitSlot = (props: { value: string; color: RGBA }) => (
+const DigitSlot = (props: { value: string; color: RGBA; caret?: boolean }) => (
   <box
     border
     borderStyle="single"
@@ -1235,8 +1241,8 @@ const DigitSlot = (props: { value: string; color: RGBA }) => (
     alignItems="center"
   >
     <text>
-      <S fg={props.value ? props.color : C.muted}>
-        <b>{props.value || "_"}</b>
+      <S fg={props.value || props.caret ? props.color : C.muted}>
+        <b>{props.value || (props.caret ? "▎" : "_")}</b>
       </S>
     </text>
   </box>
@@ -1350,6 +1356,8 @@ export const TetrisBattle = (props: {
 }) => {
   const playerId = getPlayerId();
   const [roomCode, setRoomCode] = createSignal("");
+  // Draft for the JOIN card, separate from the active room code after join.
+  const [joinCodeDraft, setJoinCodeDraft] = createSignal("");
   const [client, setClient] = createSignal<ConvexClient | null>(null);
   const [room, setRoom] = createSignal<RoomSnapshot | null>(null);
   const [conn, setConn] = createSignal("disconnected");
@@ -1452,6 +1460,7 @@ export const TetrisBattle = (props: {
   let publishInFlight = false;
   let startMatchInFlight = false;
   let lastStartMatchAttempt = 0;
+  let lastForfeitAttempt = 0;
   let lastOpponentBoard = "";
   const consumedAttackIds = new Set<string>();
 
@@ -1501,7 +1510,9 @@ export const TetrisBattle = (props: {
       // Quick-match: stay visually on the lobby (with the MATCH card in its
       // searching state) until an opponent actually joins. The moment one
       // shows up, fall through to the standard room screen.
-      if (matchSearching() && !opponent() && roomStatus() === "waiting")
+      const op = opponent();
+      const opLive = op && !opponentDisconnected();
+      if (matchSearching() && !opLive && roomStatus() === "waiting")
         return "lobby";
       return inRoom() ? "room" : "lobby";
     }
@@ -1523,6 +1534,12 @@ export const TetrisBattle = (props: {
   const opponentDisconnected = createMemo(() => {
     const age = opponentLastSeenAgeMs();
     return age !== null && age > opponentStaleMs;
+  });
+  const opponentForfeitableInMs = createMemo(() => {
+    if (route() !== "match" || !opponentDisconnected()) return null;
+    const age = opponentLastSeenAgeMs();
+    if (age === null) return null;
+    return Math.max(0, opponentForfeitMs - age);
   });
   const confirmMessage = createMemo(() => {
     const action = confirmAction();
@@ -1682,7 +1699,7 @@ export const TetrisBattle = (props: {
       setError("backend not configured");
       return;
     }
-    const code = normalizeRoomCode(roomCode());
+    const code = normalizeRoomCode(joinCodeDraft());
     if (!code) {
       setError("[J] join · type the room code · [ENTER] confirm");
       return;
@@ -1690,13 +1707,17 @@ export const TetrisBattle = (props: {
     const result = await runMutation(() =>
       cx.mutation(refs.joinRoom, { code, playerId }),
     );
-    if (result?.code) setRoomAndSubscribe(result.code);
+    if (result?.code) {
+      setJoinCodeDraft("");
+      setRoomAndSubscribe(result.code);
+    }
     setReadyLocal(false);
     setStarted(false);
   };
 
   const startJoinMode = () => {
     setError("");
+    setJoinCodeDraft("");
     setEditingRoomCode(true);
   };
 
@@ -1721,6 +1742,7 @@ export const TetrisBattle = (props: {
   };
 
   const cancelMatchSearch = () => {
+    setJoinCodeDraft("");
     setMatchSearching(false);
     setMatchSearchStartedAt(null);
     // If a room was created for the quick-match attempt and no opponent is
@@ -1809,8 +1831,28 @@ export const TetrisBattle = (props: {
   };
 
   createEffect(() => {
+    const cx = client();
+    const snapshot = room();
+    const remaining = opponentForfeitableInMs();
+    if (!cx || !snapshot || snapshot.room.status !== "active" || remaining !== 0)
+      return;
+    const nowMs = Date.now();
+    if (nowMs - lastForfeitAttempt <= 2_000) return;
+    lastForfeitAttempt = nowMs;
+    void runMutation(() =>
+      cx.mutation(refs.forfeitIfStale, {
+        code: snapshot.room.code,
+        requestingPlayerId: playerId,
+      }),
+    ).catch(() => {});
+  });
+
+  createEffect(() => {
     const snapshot = room();
     const remoteOpponent = opponent();
+    const nowMs = Date.now();
+    const remoteOpponentLive =
+      remoteOpponent && nowMs - remoteOpponent.lastSeen <= opponentStaleMs;
     if (remoteOpponent) {
       if (remoteOpponent.board !== lastOpponentBoard) {
         lastOpponentBoard = remoteOpponent.board;
@@ -1833,7 +1875,7 @@ export const TetrisBattle = (props: {
     // the room itself advances past the empty waiting state.
     if (
       matchSearching() &&
-      (remoteOpponent || snapshot?.room.status !== "waiting")
+      (remoteOpponentLive || snapshot?.room.status !== "waiting")
     ) {
       setMatchSearching(false);
       setMatchSearchStartedAt(null);
@@ -1977,6 +2019,7 @@ export const TetrisBattle = (props: {
     lastOpponentBoard = "";
     setConfirmAction(null);
     setRoomCode("");
+    setJoinCodeDraft("");
     setRoom(null);
     setReadyLocal(false);
     setStarted(false);
@@ -2085,6 +2128,7 @@ export const TetrisBattle = (props: {
     if (route() !== "match" && editingRoomCode()) {
       prevent(evt);
       if (isKey(evt, "escape", "esc")) {
+        setJoinCodeDraft("");
         setEditingRoomCode(false);
         return;
       }
@@ -2093,12 +2137,12 @@ export const TetrisBattle = (props: {
         return;
       }
       if (isKey(evt, "backspace", "delete")) {
-        setRoomCode((code) => code.slice(0, -1));
+        setJoinCodeDraft((code) => code.slice(0, -1));
         return;
       }
       const key = evt.name;
-      if (/^[0-9]$/.test(key) && roomCode().length < 4)
-        setRoomCode((code) => normalizeRoomCode(code + key));
+      if (/^[0-9]$/.test(key) && joinCodeDraft().length < 4)
+        setJoinCodeDraft((code) => normalizeRoomCode(code + key));
       return;
     }
 
@@ -2159,7 +2203,7 @@ export const TetrisBattle = (props: {
         return;
       }
       if (isKey(evt, "backspace", "delete")) {
-        setRoomCode((code) => code.slice(0, -1));
+        setJoinCodeDraft((code) => code.slice(0, -1));
         return;
       }
       // Frontpage shortcut: typing a digit on the lobby is treated as the
@@ -2167,7 +2211,7 @@ export const TetrisBattle = (props: {
       // with the digit so the user doesn't have to press [J] first.
       if (route() === "lobby" && /^[0-9]$/.test(evt.name)) {
         startJoinMode();
-        setRoomCode((code) => normalizeRoomCode(code + evt.name));
+        setJoinCodeDraft((code) => normalizeRoomCode(code + evt.name));
         return;
       }
       return;
@@ -2310,21 +2354,20 @@ export const TetrisBattle = (props: {
   // The 4-digit JOIN code input row.
   const JoinSlots = () => {
     const slots = createMemo(() => {
-      const code = roomCode().padEnd(4, " ");
+      const code = joinCodeDraft().padEnd(4, " ");
       return [0, 1, 2, 3].map((i) => code[i]!.trim());
     });
     return (
       <box flexDirection="row" gap={1}>
         <For each={slots()}>
-          {(d) => <DigitSlot value={d} color={C.info} />}
+          {(d, i) => (
+            <DigitSlot
+              value={d}
+              color={C.info}
+              caret={editingRoomCode() && joinCodeDraft().length === i()}
+            />
+          )}
         </For>
-        <Show when={editingRoomCode()}>
-          <text>
-            <S fg={C.info}>
-              <b>▏</b>
-            </S>
-          </text>
-        </Show>
       </box>
     );
   };
@@ -2775,6 +2818,17 @@ export const TetrisBattle = (props: {
             <S fg={C.muted}>
               {opponentDisconnected() ? "opponent lost" : "opponent online"}
             </S>
+            <Show when={opponentForfeitableInMs() !== null}>
+              <S fg={C.faint}> · </S>
+              <Show
+                when={(opponentForfeitableInMs() ?? 0) > 0}
+                fallback={<S fg={C.bad}>forfeiting...</S>}
+              >
+                <S fg={C.warn}>
+                  forfeit in {Math.ceil((opponentForfeitableInMs() ?? 0) / 1000)}s
+                </S>
+              </Show>
+            </Show>
           </text>
         }
       />
