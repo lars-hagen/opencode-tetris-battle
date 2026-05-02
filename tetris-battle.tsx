@@ -373,16 +373,11 @@ const PIECE: Record<PieceType, RGBA> = {
   L: RGBA.fromInts(255, 127, 0, 255), //  orange
 };
 
-// ~45% intensity of the canonical piece color, used for ghost projections.
-const PIECE_GHOST: Record<PieceType, RGBA> = {
-  I: RGBA.fromInts(0, 115, 115, 255),
-  O: RGBA.fromInts(120, 120, 0, 255),
-  T: RGBA.fromInts(85, 0, 125, 255),
-  S: RGBA.fromInts(0, 125, 0, 255),
-  Z: RGBA.fromInts(125, 0, 0, 255),
-  J: RGBA.fromInts(0, 0, 130, 255),
-  L: RGBA.fromInts(125, 65, 0, 255),
-};
+// Uniform bright grey for ghost projections — clearly visible against the
+// dark board without competing with the per-piece colors. Matches canon's
+// `rgb(96, 100, 120)` family but pushed brighter so the silhouette reads at
+// a glance even on dark terminals.
+const GHOST_COLOR = RGBA.fromInts(170, 175, 195, 255);
 
 const PIECE_ORDER: PieceType[] = ["I", "O", "T", "S", "Z", "J", "L"];
 
@@ -414,7 +409,7 @@ const C = {
 
 // Back-compat shims so the unchanged helpers below still resolve.
 const pieceColors = PIECE;
-const ghostColor = C.faint;
+const ghostColor = GHOST_COLOR;
 const dotColor = C.empty;
 const garbageColor = C.garbage;
 
@@ -835,10 +830,11 @@ const cellGlyph = (cell: DisplayCell): string => {
   return "█";
 };
 
-const cellColor = (cell: DisplayCell, ghostPiece?: PieceType | null): RGBA => {
+const cellColor = (cell: DisplayCell, _ghostPiece?: PieceType | null): RGBA => {
   if (cell === null) return dotColor;
-  if (cell === "ghost")
-    return ghostPiece ? PIECE_GHOST[ghostPiece] : ghostColor;
+  // Uniform grey ghost — much higher contrast than per-piece tinted ghosts
+  // and still distinct from locked pieces and garbage.
+  if (cell === "ghost") return ghostColor;
   if (cell === "garbage") return garbageColor;
   return pieceColors[cell];
 };
@@ -1362,6 +1358,17 @@ export const TetrisBattle = (props: {
   const [ready, setReadyLocal] = createSignal(false);
   const [started, setStarted] = createSignal(false);
   const [editingRoomCode, setEditingRoomCode] = createSignal(false);
+  // Quick-match flow: when [M] is pressed we want to remain visually on the
+  // lobby (showing a `searching...` state on the MATCH card) until a real
+  // opponent joins the auto-created room. Without this flag the route memo
+  // immediately flips to `room` because `inRoom()` becomes true the moment
+  // `quickJoin` returns. Setting `matchSearching` keeps the user on lobby
+  // until either an opponent appears (route advances naturally) or the user
+  // presses [M] again to cancel.
+  const [matchSearching, setMatchSearching] = createSignal(false);
+  const [matchSearchStartedAt, setMatchSearchStartedAt] = createSignal<
+    number | null
+  >(null);
   const [confirmAction, setConfirmAction] = createSignal<ConfirmAction | null>(
     null,
   );
@@ -1429,6 +1436,7 @@ export const TetrisBattle = (props: {
     error();
     splashSeen();
     updateAvailable();
+    matchSearching();
     setTimeout(measureCenter, 0);
   });
 
@@ -1490,6 +1498,11 @@ export const TetrisBattle = (props: {
     if (roomStatus() === "active" && started() && !ended(state()))
       return "match";
     if (roomStatus() === "waiting" || roomStatus() === "countdown") {
+      // Quick-match: stay visually on the lobby (with the MATCH card in its
+      // searching state) until an opponent actually joins. The moment one
+      // shows up, fall through to the standard room screen.
+      if (matchSearching() && !opponent() && roomStatus() === "waiting")
+        return "lobby";
       return inRoom() ? "room" : "lobby";
     }
     if (ended(state()) || roomStatus() === "done") return "over";
@@ -1540,6 +1553,19 @@ export const TetrisBattle = (props: {
     if (!badge) return null;
     return <StateDot color={badge.color} label={badge.label} />;
   };
+  // mm:ss elapsed since the user pressed [M] to start a quick-match search.
+  // Empty string when no search is in flight so the UI doesn't render a
+  // stale clock.
+  const matchSearchElapsedText = createMemo(() => {
+    const startedAt = matchSearchStartedAt();
+    if (!startedAt) return "";
+    const elapsed = Math.max(0, now() - startedAt);
+    const s = Math.floor(elapsed / 1000);
+    const mm = String(Math.floor(s / 60)).padStart(2, "0");
+    const ss = String(s % 60).padStart(2, "0");
+    return `${mm}:${ss}`;
+  });
+
   const matchTimeText = createMemo(() => {
     const startedAt = room()?.room.startedAt;
     if (!startedAt) return "00:00";
@@ -1680,6 +1706,8 @@ export const TetrisBattle = (props: {
       setError("backend not configured");
       return;
     }
+    setMatchSearching(true);
+    setMatchSearchStartedAt(Date.now());
     const result = await runMutation(() =>
       cx.mutation(refs.quickJoin, {
         code: createRoomCode(),
@@ -1690,6 +1718,14 @@ export const TetrisBattle = (props: {
     if (result?.code) setRoomAndSubscribe(result.code);
     setReadyLocal(false);
     setStarted(false);
+  };
+
+  const cancelMatchSearch = () => {
+    setMatchSearching(false);
+    setMatchSearchStartedAt(null);
+    // If a room was created for the quick-match attempt and no opponent is
+    // there yet, drop it so we're not squatting on an empty room.
+    if (roomCode() && !opponent()) leaveToLobby();
   };
 
   const sendHeartbeat = () => {
@@ -1793,6 +1829,15 @@ export const TetrisBattle = (props: {
     const localMe = me();
     if (localMe && localMe.ready !== untrack(ready))
       setReadyLocal(localMe.ready);
+    // Quick-match search ends as soon as an opponent has joined the room or
+    // the room itself advances past the empty waiting state.
+    if (
+      matchSearching() &&
+      (remoteOpponent || snapshot?.room.status !== "waiting")
+    ) {
+      setMatchSearching(false);
+      setMatchSearchStartedAt(null);
+    }
     if (snapshot?.room.status === "active" && !started()) {
       setStarted(true);
       setPaused(false);
@@ -1937,6 +1982,8 @@ export const TetrisBattle = (props: {
     setStarted(false);
     setPaused(false);
     setEditingRoomCode(false);
+    setMatchSearching(false);
+    setMatchSearchStartedAt(null);
     setPublishLatencyMs(null);
     setOpponentBoardSeenAt(null);
     setState(
@@ -2090,7 +2137,9 @@ export const TetrisBattle = (props: {
     if (route() === "lobby" || route() === "room") {
       prevent(evt);
       if (isKey(evt, "m", "M")) {
-        void quickJoin();
+        // Toggle: while a quick-match search is in flight, [M] cancels.
+        if (matchSearching()) cancelMatchSearch();
+        else void quickJoin();
         return;
       }
       if (isKey(evt, "n", "N")) {
@@ -2111,6 +2160,14 @@ export const TetrisBattle = (props: {
       }
       if (isKey(evt, "backspace", "delete")) {
         setRoomCode((code) => code.slice(0, -1));
+        return;
+      }
+      // Frontpage shortcut: typing a digit on the lobby is treated as the
+      // start of a join code. Drop into the JOIN editing mode and seed it
+      // with the digit so the user doesn't have to press [J] first.
+      if (route() === "lobby" && /^[0-9]$/.test(evt.name)) {
+        startJoinMode();
+        setRoomCode((code) => normalizeRoomCode(code + evt.name));
         return;
       }
       return;
@@ -2495,15 +2552,31 @@ export const TetrisBattle = (props: {
                 <S fg={C.muted}>auto-pair with the next ready foe</S>
               </text>
               <box paddingTop={1}>
-                <text>
-                  <Show when={busy()} fallback={<S fg={C.muted}>idle</S>}>
+                <Show
+                  when={matchSearching() || busy()}
+                  fallback={
+                    <text>
+                      <S fg={C.muted}>idle</S>
+                    </text>
+                  }
+                >
+                  <text>
                     <S fg={C.warn}>
                       <b>◐</b>
                     </S>
                     <S fg={C.ink}> searching</S>
-                    <S fg={C.muted}>...</S>
-                  </Show>
-                </text>
+                    <S fg={C.muted}>
+                      ... {matchSearchElapsedText()}
+                    </S>
+                  </text>
+                  <text>
+                    <S fg={C.muted}>press </S>
+                    <S fg={C.warn}>
+                      <b>[M]</b>
+                    </S>
+                    <S fg={C.muted}> to cancel</S>
+                  </text>
+                </Show>
               </box>
             </box>
           )}
@@ -2552,7 +2625,7 @@ export const TetrisBattle = (props: {
           items={[
             { key: "N", verb: "new" },
             { key: "J", verb: "join" },
-            { key: "M", verb: "match" },
+            { key: "M", verb: matchSearching() ? "cancel" : "match" },
             { key: "R", verb: "ready" },
             { key: "Q", verb: "quit" },
           ]}
@@ -2998,19 +3071,6 @@ export const TetrisBattle = (props: {
         <StatusRibbon
           state="MATCH_OVER"
           stateColor={isWin() ? C.win : C.loss}
-          middle={
-            <text>
-              <S fg={C.muted}>ROOM </S>
-              <S fg={PIECE.I}>
-                <b>{roomCode() || "—"}</b>
-              </S>
-              <S fg={C.faint}> </S>
-              <S fg={C.muted}>WINNER </S>
-              <S fg={isWin() ? C.win : C.loss}>
-                <b>{isWin() ? "YOU" : "OPPONENT"}</b>
-              </S>
-            </text>
-          }
           right={
             <StateDot
               color={isWin() ? C.win : C.loss}
