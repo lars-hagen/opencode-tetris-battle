@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "opencode-tetris-battle",
-  "version": "1.0.42",
+  "version": "1.0.43",
   "description": "Multiplayer Tetris Battle plugin for OpenCode TUI",
   "type": "module",
   "license": "MIT",
@@ -28,11 +28,14 @@
     "convex:dev": "convex dev",
     "convex:deploy": "convex deploy",
     "install:test": "bun run scripts/install-test.ts",
-    "upgrade": "bun run scripts/upgrade.ts",
+    "upgrade": "node bin/cli.mjs upgrade",
     "prepack": "bun run typecheck && bun test",
     "release:patch": "bun run typecheck && bun test && npm version patch -m \"chore: release %s\" && git push && git push origin $(git describe --tags --abbrev=0)",
     "release:minor": "bun run typecheck && bun test && npm version minor -m \"chore: release %s\" && git push && git push origin $(git describe --tags --abbrev=0)",
     "release:major": "bun run typecheck && bun test && npm version major -m \"chore: release %s\" && git push && git push origin $(git describe --tags --abbrev=0)"
+  },
+  "bin": {
+    "opencode-tetris-battle": "./bin/cli.mjs"
   },
   "files": [
     "README.md",
@@ -40,7 +43,8 @@
     "tui.tsx",
     "tetris-battle.tsx",
     "version.ts",
-    "tsconfig.json"
+    "tsconfig.json",
+    "bin/cli.mjs"
   ],
   "exports": {
     ".": {

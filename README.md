@@ -22,17 +22,18 @@ The OpenCode plugin cache keys installs by literal spec, so re-running
 `opencode plugin ...@latest` after a release is a no-op until the cache is
 busted. Use either of the following to pull a new version cleanly:
 
-From inside OpenCode (preferred):
+From any shell (no clone needed):
+
+```sh
+bunx opencode-tetris-battle upgrade
+```
+
+(equivalent: `npx opencode-tetris-battle upgrade`, `pnpm dlx opencode-tetris-battle upgrade`)
+
+From inside OpenCode:
 
 ```text
 /tetris-battle-update
-```
-
-From a shell (stable one-liner):
-
-```sh
-rm -rf ~/.cache/opencode/packages/opencode-tetris-battle@* && \
-  opencode plugin opencode-tetris-battle@latest --global --force
 ```
 
 From a clone of this repo:
