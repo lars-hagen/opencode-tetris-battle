@@ -33,8 +33,15 @@ Usage:
 `);
 };
 
+const xdgCacheHome = () =>
+  process.env.XDG_CACHE_HOME && process.env.XDG_CACHE_HOME.trim()
+    ? process.env.XDG_CACHE_HOME
+    : join(homedir(), ".cache");
+
 const upgrade = () => {
-  const cacheRoot = join(homedir(), ".cache", "opencode", "packages");
+  // 1. Bust opencode's plugin cache (keyed by literal install spec, so
+  //    `@latest` sticks to whatever version it first resolved to).
+  const cacheRoot = join(xdgCacheHome(), "opencode", "packages");
   if (existsSync(cacheRoot)) {
     const stale = readdirSync(cacheRoot).filter((entry) =>
       entry.startsWith(`${PKG_NAME}@`),
@@ -50,6 +57,23 @@ const upgrade = () => {
     console.log(`-> no opencode cache yet at ${cacheRoot}`);
   }
 
+  // 2. Bust npm's metadata cache so `@latest` resolves to the freshly
+  //    published version, not whatever arborist last cached. The key is the
+  //    full registry URL; `npm cache clean <key> --force` is the only
+  //    documented way to evict a single package without nuking everything.
+  //    Falls back silently if npm isn't on PATH (the install below may
+  //    still pick up the new version once npm's TTL expires).
+  const metadataKey = `make-fetch-happen:request-cache:https://registry.npmjs.org/${PKG_NAME}`;
+  try {
+    console.log(`-> npm cache clean ${PKG_NAME} (metadata)`);
+    execSync(`npm cache clean "${metadataKey}" --force`, {
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+  } catch {
+    // npm not installed or cache miss; fine to continue.
+  }
+
+  // 3. Reinstall.
   console.log(`-> opencode plugin ${PKG_NAME}@latest --global --force`);
   execSync(`opencode plugin ${PKG_NAME}@latest --global --force`, {
     stdio: "inherit",
